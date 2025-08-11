@@ -1,0 +1,142 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    concurrency:
+      group: build-${{ github.ref }}-${{ matrix.os }}
+      cancel-in-progress: true
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Detect project directory
+        id: detect
+        shell: bash
+        run: |
+          if [ -f "Selenix-Browser/package.json" ]; then
+            PROJECT_DIR="Selenix-Browser"
+          else
+            PROJECT_DIR="."
+          fi
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Using PROJECT_DIR=$PROJECT_DIR"
+          mkdir -p "$PROJECT_DIR/dist"
+
+      - name: Read product name
+        id: meta
+        shell: bash
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          PRODUCT_NAME=$(node -e "try{console.log(require('./electron-builder.json').productName)}catch(e){try{console.log(require('./package.json').productName)}catch(e2){console.log('app')}}")
+          echo "PRODUCT_NAME=$PRODUCT_NAME" >> "$GITHUB_ENV"
+          echo "product=$PRODUCT_NAME" >> "$GITHUB_OUTPUT"
+          echo "Product: $PRODUCT_NAME"
+
+      - name: Setup Node.js (v24)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Enable Corepack and Yarn 4
+        shell: bash
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          corepack enable
+          corepack install
+          yarn -v
+
+      - name: Show versions
+        shell: bash
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          node -v
+          corepack -v || true
+          yarn -v
+
+      - name: Restore Yarn cache (.yarn/cache)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.PROJECT_DIR }}/.yarn/cache
+            ${{ env.PROJECT_DIR }}/.yarn/install-state.gz
+          key: ${{ runner.os }}-yarn4-${{ hashFiles(format('{0}/yarn.lock', env.PROJECT_DIR)) }}
+          restore-keys: |
+            ${{ runner.os }}-yarn4-
+
+      - name: Cache Electron & builder downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/electron
+            ~/.cache/electron-builder
+            ~/Library/Caches/electron
+            ~/Library/Caches/electron-builder
+            $LOCALAPPDATA/electron/Cache
+            $LOCALAPPDATA/electron-builder/Cache
+          key: ${{ runner.os }}-ebuild-${{ hashFiles(format('{0}/package.json', env.PROJECT_DIR)) }}
+          restore-keys: |
+            ${{ runner.os }}-ebuild-
+
+      - name: Install Linux deps (with apt lock wait)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo bash -c 'until ! pgrep -x apt >/dev/null && \
+                              ! fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 && \
+                              ! fuser /var/lib/apt/lists/lock >/dev/null 2>&1; do
+                          echo "Waiting for apt/dpkg locks..."; sleep 5; done'
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libfuse2 rpm libarchive-tools
+
+      - name: Install dependencies (Yarn 4)
+        shell: bash
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: yarn install --immutable
+
+      - name: Get last commit message
+        id: log
+        shell: bash
+        run: |
+          echo "message=$(git log --no-merges -1 --pretty=%s)" >> "$GITHUB_OUTPUT"
+
+      - name: Clean dist (safety)
+        shell: bash
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: rm -rf dist/* || true
+
+      # --- Build: make signing a NO-OP on macOS ---
+      - name: Build (electron-builder)
+        shell: bash
+        working-directory: ${{ env.PROJECT_DIR }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          RELEASE: ${{ contains(steps.log.outputs.message, 'bump version') || startsWith(github.ref, 'refs/tags/') }}
+        run: |
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            unset CSC_LINK CSC_KEY_PASSWORD MAC_CERTS MAC_CERTS_PASSWORD
+          fi
+          yarn ci-build
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PRODUCT_NAME }}-${{ runner.os }}-artifacts
+          path: |
+            ${{ env.PROJECT_DIR }}/dist/**
+          if-no-files-found: error

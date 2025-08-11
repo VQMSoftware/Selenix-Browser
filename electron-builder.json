@@ -1,0 +1,68 @@
+{
+  "appId": "org.vqmsoftware.selenix",
+  "productName": "selenix",
+
+  "asar": true,
+  "generateUpdatesFilesForAllChannels": true,
+
+  "directories": {
+    "output": "dist",
+    "buildResources": "static/icons"
+  },
+
+  "files": [
+    "build/**/*",
+    "package.json",
+    "static/**/*"
+  ],
+
+  "publish": [
+    {
+      "provider": "github",
+      "owner": "vqmsoftware",
+      "repo": "Selenix-Browser",
+      "releaseType": "release"
+    }
+  ],
+
+  "win": {
+    "target": [
+      { "target": "nsis-web", "arch": ["x64", "ia32"] },
+      { "target": "zip", "arch": ["x64", "ia32"] }
+    ],
+    "artifactName": "${productName}-${version}-${arch}-win.${ext}"
+  },
+
+  "nsis": {
+    "include": "static/installer.nsh",
+    "perMachine": true,
+    "artifactName": "${productName}-Web-Setup-${version}.${ext}"
+  },
+  "nsisWeb": {
+    "artifactName": "${productName}-Web-Setup-${version}.${ext}"
+  },
+
+  "mac": {
+    "category": "public.app-category.navigation",
+    "target": ["dmg", "zip"],
+    "artifactName": "${productName}-${version}-${arch}-mac.${ext}"
+  },
+
+  "linux": {
+    "category": "Network",
+    "target": [
+      { "target": "AppImage", "arch": ["x64"] },
+      { "target": "deb", "arch": ["x64"] }
+    ],
+    "artifactName": "${productName}-${version}-${arch}.${ext}"
+  },
+
+  "fileAssociations": [
+    {
+      "name": "Document",
+      "description": "selenix",
+      "role": "Viewer",
+      "ext": "html"
+    }
+  ]
+}

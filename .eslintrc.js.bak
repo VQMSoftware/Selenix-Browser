@@ -1,0 +1,23 @@
+module.exports = {
+  parser: '@typescript-eslint/parser',
+  extends: [
+    'plugin:react/recommended',
+    'plugin:@typescript-eslint/recommended',
+    // Use the built‑in Prettier configuration. The old
+    // `prettier/@typescript-eslint` and `prettier/react` presets were
+    // removed in recent versions of eslint‑config‑prettier【720843281807270†L79-L83】.
+    'plugin:prettier/recommended',
+  ],
+  parserOptions: {
+    // Modern ECMAScript features (Node 24 supports ES2023)
+    ecmaVersion: 2022,
+    sourceType: 'module',
+  },
+  rules: {
+    '@typescript-eslint/explicit-function-return-type': 'off',
+    '@typescript-eslint/interface-name-prefix': 'off',
+    '@typescript-eslint/no-var-requires': 'off',
+    '@typescript-eslint/no-namespace': 'off',
+    '@typescript-eslint/explicit-module-boundary-types': 'off',
+  },
+};
