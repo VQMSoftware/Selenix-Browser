@@ -115,7 +115,7 @@ async function createOrLoadBlocker(): Promise<InstanceType<typeof ElectronBlocke
 // Cosmetic filter events → bubble to your UI (optional parity with your old code)
 function emitBlockedEvent(request: any /* Request-like */) {
   try {
-    const win = Application.instance?.windows.findByBrowserView?.(request.tabId);
+    const win = Application.instance?.windows.findByContentsView?.(request.tabId);
     if (!win) return;
     const view = win.viewManager?.views.get?.(request.tabId);
     view?.emitEvent?.('blocked-ad');

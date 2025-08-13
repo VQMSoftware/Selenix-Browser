@@ -68,7 +68,7 @@ export class SessionsService {
         callback: (permissionGranted: boolean) => void,
         details: any,
       ) => {
-        const window = Application.instance.windows.findByBrowserView(
+        const window = Application.instance.windows.findByContentsView(
           webContents.id,
         );
         if (!window || webContents.id !== window.viewManager.selectedId) return;
@@ -124,7 +124,7 @@ export class SessionsService {
     });
 
     const downloadsDialog = () =>
-      Application.instance.dialogs.getDynamic('downloads-dialog')?.browserView
+      Application.instance.dialogs.getDynamic('downloads-dialog')?.webContentsView
         ?.webContents;
 
     const downloads: IDownloadItem[] = [];
@@ -137,7 +137,7 @@ export class SessionsService {
       ses.on('will-download', (event: Electron.Event, item: DownloadItem, webContents: WebContents) => {
         const fileName = item.getFilename();
         const id = makeId(32);
-        const window = Application.instance.windows.findByBrowserView(
+        const window = Application.instance.windows.findByContentsView(
           webContents.id,
         );
 

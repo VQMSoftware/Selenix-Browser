@@ -146,7 +146,7 @@ export class ITab {
     if (!this.isClosing) {
       store.tabs.selectedTabId = this.id;
 
-      ipcRenderer.send(`browserview-show-${store.windowId}`);
+      ipcRenderer.send(`web-contents-view-show-${store.windowId}`);
 
       const focused = this.addressbarFocused;
 

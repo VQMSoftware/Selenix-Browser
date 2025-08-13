@@ -1,4 +1,4 @@
-import { BrowserView, app, ipcMain } from 'electron';
+import { WebContentsView, app, ipcMain } from 'electron';
 import { parse as parseUrl } from 'url';
 import { getViewMenu } from './menus/view';
 import { AppWindow } from './windows';
@@ -24,7 +24,7 @@ interface IAuthInfo {
 }
 
 export class View {
-  public browserView: BrowserView;
+  public webContentsView: WebContentsView;
 
   public isNewTab = false;
   public homeUrl: string;
@@ -57,7 +57,7 @@ export class View {
 
   public constructor(window: AppWindow, url: string, incognito: boolean) {
     const path = require('path');
-    this.browserView = new BrowserView({
+    this.webContentsView = new WebContentsView({
       webPreferences: {
         // Construct the preload script path using path.join(). On Windows the
         // returned app path may contain backslashes, and string
@@ -65,7 +65,7 @@ export class View {
         // normalises separators across platforms.
         preload: path.join(app.getAppPath(), 'build', 'view-preload.bundle.js'),
         // Enable Node integration and disable context isolation/sandbox for
-        // BrowserView renderers. The existing renderer code relies on
+        // WebContentsView renderers. The existing renderer code relies on
         // Node.js modules (e.g. fs, path, electron) being available via
         // CommonJS require(). Without nodeIntegration, require is undefined and
         // modules fail to load. Since modern Electron versions default to
@@ -92,7 +92,7 @@ export class View {
       // Dynamically require to avoid importing @electron/remote/main in
       // environments where it might not be available (e.g. unit tests).
       const { enable } = require('@electron/remote/main');
-      enable(this.browserView.webContents);
+      enable(this.webContentsView.webContents);
     } catch (err) {
       // If enabling fails, log the error but continue. The renderer will
       // gracefully handle missing remote APIs.
@@ -131,7 +131,7 @@ export class View {
     this.webContents.addListener('found-in-page', (e, result) => {
       Application.instance.dialogs
         .getDynamic('find')
-        .browserView.webContents.send('found-in-page', result);
+        .webContentsView.webContents.send('found-in-page', result);
     });
 
     this.webContents.addListener('page-title-updated', (e, title) => {
@@ -306,16 +306,17 @@ export class View {
 
     this.webContents.loadURL(url);
 
-    this.browserView.setAutoResize({
-      width: true,
-      height: true,
-      horizontal: false,
-      vertical: false,
-    });
+ //    TODO:
+ //   this.webContentsView.setAutoResize({
+ //     width: true,
+ //     height: true,
+ //     horizontal: false,
+ //     vertical: false,
+ //   });
   }
 
   public get webContents() {
-    return this.browserView.webContents;
+    return this.webContentsView.webContents;
   }
 
   public get url() {
@@ -335,25 +336,25 @@ export class View {
   }
 
   public updateNavigationState() {
-    if (this.browserView.webContents.isDestroyed()) return;
+    if (this.webContentsView.webContents.isDestroyed()) return;
 
     if (this.window.viewManager.selectedId === this.id) {
       this.window.send('update-navigation-state', {
-        canGoBack: this.webContents.canGoBack(),
-        canGoForward: this.webContents.canGoForward(),
+        canGoBack: this.webContents.navigationHistory.canGoBack(),
+        canGoForward: this.webContents.navigationHistory.canGoForward(),
       });
     }
   }
 
   public destroy() {
-    (this.browserView.webContents as any).destroy();
-    this.browserView = null;
+    (this.webContentsView.webContents as any).destroy();
+    this.webContentsView = null;
   }
 
   public async updateCredentials() {
     if (
       !process.env.ENABLE_AUTOFILL ||
-      this.browserView.webContents.isDestroyed()
+      this.webContentsView.webContents.isDestroyed()
     )
       return;
 

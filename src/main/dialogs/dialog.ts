@@ -1,5 +1,4 @@
-import { BrowserView, app, ipcMain, BrowserWindow } from 'electron';
-// Bring in enable from @electron/remote/main so that remote functions are available in dialogs.
+import { WebContentsView, app, ipcMain, BrowserWindow } from 'electron';
 import { enable } from '@electron/remote/main';
 import { join } from 'path';
 import { roundifyRectangle } from '../services/dialogs-service';
@@ -22,7 +21,7 @@ interface IRectangle {
 
 export class PersistentDialog {
   public browserWindow: BrowserWindow;
-  public browserView: BrowserView;
+  public webContentsView: WebContentsView;
 
   public visible = false;
 
@@ -48,23 +47,49 @@ export class PersistentDialog {
     hideTimeout,
     webPreferences,
   }: IOptions) {
-    this.browserView = new BrowserView({
+    // Create a view with renderer opts but DO NOT show it until dom-ready
+    this.webContentsView = new WebContentsView({
       webPreferences: {
         nodeIntegration: true,
         contextIsolation: false,
-        // enableRemoteModule has been removed. We'll enable remote via the enable() call below.
+        backgroundThrottling: false,
         ...webPreferences,
       },
     });
 
-    // Enable remote for this dialog's BrowserView webContents.
-    enable(this.browserView.webContents);
+    // Enable @electron/remote for this renderer
+    enable(this.webContentsView.webContents);
+
+    // --- CRITICAL TRANSPARENCY SETTINGS (done before any load) ---
+    // Newer Electron exposes setBackgroundColor on the view itself.
+    (this.webContentsView as any).setBackgroundColor?.('#00000000');
+    // Older versions: do it on webContents too.
+    (this.webContents as any).setBackgroundColor?.('#00000000');
+
+    // Load a transparent boot page immediately so there is NEVER a black frame
+    // while the real HTML is being resolved.
+    const transparentBoot = `data:text/html;charset=utf-8,
+      <meta charset="utf-8">
+      <style>
+        html,body,#app{margin:0;height:100%;background:transparent !important}
+      </style>
+      <div id="app"></div>`;
+    this.webContents.loadURL(transparentBoot);
+
+    this.webContents.on('dom-ready', () => {
+      // Ensure renderer stays transparent even if app CSS changes
+      try {
+        this.webContents.insertCSS(`
+          html, body, #app { background: transparent !important; }
+        `);
+      } catch {}
+    });
 
     this.bounds = { ...this.bounds, ...bounds };
-    this.hideTimeout = hideTimeout;
+    this.hideTimeout = hideTimeout!;
     this.name = name;
 
-    const { webContents } = this.browserView;
+    const { webContents } = this.webContentsView;
 
     ipcMain.on(`hide-${webContents.id}`, () => {
       this.hide(false, false);
@@ -80,18 +105,20 @@ export class PersistentDialog {
     });
 
     if (process.env.NODE_ENV === 'development') {
+      // Only navigate to the real page now; boot page already transparent
       this.webContents.loadURL(`http://localhost:4444/${this.name}.html`);
     } else {
-      // When loading dialogs in production, construct an absolute file path
-      // and use loadFile() instead of manually composing a file:// URL. This
-      // prevents invalid paths on Windows which can lead to blank views.
       const filePath = join(app.getAppPath(), 'build', `${this.name}.html`);
       this.webContents.loadFile(filePath);
+    }
+
+    if (devtools) {
+      this.webContents.openDevTools({ mode: 'detach' });
     }
   }
 
   public get webContents() {
-    return this.browserView.webContents;
+    return this.webContentsView.webContents;
   }
 
   public get id() {
@@ -107,7 +134,7 @@ export class PersistentDialog {
     });
 
     if (this.visible) {
-      this.browserView.setBounds(this.bounds as any);
+      this.webContentsView.setBounds(this.bounds as any);
     }
   }
 
@@ -123,7 +150,7 @@ export class PersistentDialog {
         true,
       );
 
-      const callback = () => {
+      const attach = () => {
         if (this.visible) {
           if (focus) this.webContents.focus();
           return;
@@ -131,7 +158,8 @@ export class PersistentDialog {
 
         this.visible = true;
 
-        browserWindow.addBrowserView(this.browserView);
+        // Attach only after dom-ready to avoid an initial black flash.
+        browserWindow.contentView.addChildView(this.webContentsView);
         this.rearrange();
 
         if (focus) this.webContents.focus();
@@ -140,11 +168,11 @@ export class PersistentDialog {
       };
 
       if (!this.loaded && waitForLoad) {
-        this.showCallback = callback;
+        this.showCallback = attach;
         return;
       }
 
-      callback();
+      attach();
     });
   }
 
@@ -175,40 +203,49 @@ export class PersistentDialog {
 
     clearTimeout(this.timeout);
 
+    const removeFromWindow = () => {
+      try {
+        this.browserWindow!.contentView.removeChildView(this.webContentsView);
+      } catch {}
+    };
+
     if (this.hideTimeout) {
-      this.timeout = setTimeout(() => {
-        this.browserWindow.removeBrowserView(this.browserView);
-      }, this.hideTimeout);
+      this.timeout = setTimeout(removeFromWindow, this.hideTimeout);
     } else {
-      this.browserWindow.removeBrowserView(this.browserView);
+      removeFromWindow();
     }
 
     this.visible = false;
-
-    // this.appWindow.fixDragging();
   }
 
   public bringToTop() {
-    this.browserWindow.removeBrowserView(this.browserView);
-    this.browserWindow.addBrowserView(this.browserView);
+    this.browserWindow.contentView.removeChildView(this.webContentsView);
+    this.browserWindow.contentView.addChildView(this.webContentsView);
   }
 
   public destroy() {
-    if (this.browserView) {
-      try {
-        // Remove from window first
-        if (this.browserWindow) {
-          this.browserWindow.removeBrowserView(this.browserView);
-        }
-        
-        // Proper modern Electron BrowserView cleanup
-        (this.browserView as any).destroy();
-        this.browserView = null;
-      } catch (e) {
-        console.error('Error destroying browser view:', e);
+    if (!this.webContentsView) return;
+
+    try {
+      if (this.browserWindow) {
+        this.browserWindow.contentView.removeChildView(this.webContentsView);
       }
+    } catch {}
+
+    try {
+      // Make sure the renderer is inactive & blank before destroy to avoid
+      // one last black composite on some drivers.
+      if (!this.webContents.isDestroyed()) {
+        this.webContents.loadURL('about:blank');
+      }
+    } catch {}
+
+    try {
+      (this.webContentsView as any).destroy?.();
+    } catch (e) {
+      console.error('Error destroying browser view:', e);
     }
-  // TODO:  this.browserView.destroy();
-    this.browserView = null;
+
+    this.webContentsView = null;
   }
 }

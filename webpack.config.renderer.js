@@ -52,7 +52,7 @@ const appConfig = getConfig(getBaseConfig('app'), {
   // imports such as `import { ipcRenderer } from 'electron'` are resolved
   // to the remote module, which proxies Electron APIs through IPC. Without
   // this alias, webpack would attempt to bundle the native electron module
-  // which is not available in a sandboxed BrowserView.
+  // which is not available in a sandboxed WebContentsViews.
   resolve: {
     alias: {
       ...(getBaseConfig('app').resolve?.alias || {}),

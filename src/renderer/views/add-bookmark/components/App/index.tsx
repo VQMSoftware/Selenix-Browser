@@ -41,7 +41,7 @@ const onDropdownClick = (e: React.MouseEvent<HTMLDivElement>) => {
     })),
   ]);
 
-  const { x, y } = (remote.BrowserView as any).fromWebContents(
+  const { x, y } = (remote.webContents as any).fromWebContents(
     remote.getCurrentWebContents(),
   ).getBounds();
 

@@ -5,7 +5,7 @@ import {
   Menu,
   session,
   ipcMain,
-  BrowserView,
+  WebContentsView,
 } from 'electron';
 import { isURL, prefixHttp } from '~/utils';
 import { saveAs, viewSource, printPage } from './common-actions';
@@ -171,17 +171,17 @@ export const getViewMenu = (
       {
         label: 'Go back',
         accelerator: 'Alt+Left',
-        enabled: webContents.canGoBack(),
+        enabled: webContents.navigationHistory.canGoBack(),
         click: () => {
-          webContents.goBack();
+          webContents.navigationHistory.goBack();
         },
       },
       {
         label: 'Go forward',
         accelerator: 'Alt+Right',
-        enabled: webContents.canGoForward(),
+        enabled: webContents.navigationHistory.canGoForward(),
         click: () => {
-          webContents.goForward();
+          webContents.navigationHistory.goForward();
         },
       },
       {

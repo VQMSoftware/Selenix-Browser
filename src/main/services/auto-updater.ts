@@ -33,11 +33,11 @@ export const runAutoUpdaterService = () => {
         w.send(channel, ...args);
       } catch {}
     }
-    // And to your menu BrowserView, if any
+    // And to your menu WebContentsView, if any
     try {
       Application.instance.dialogs
         .getDynamic('menu')
-        ?.browserView?.webContents?.send(channel, ...args);
+        ?.webContentsView?.webContents?.send(channel, ...args);
     } catch {}
   };
 
