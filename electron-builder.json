@@ -16,15 +16,6 @@
     "static/**/*"
   ],
 
-  "publish": [
-    {
-      "provider": "github",
-      "owner": "vqmsoftware",
-      "repo": "Selenix-Browser",
-      "releaseType": "release"
-    }
-  ],
-
   "win": {
     "target": [
       { "target": "nsis-web", "arch": ["x64", "ia32"] },
