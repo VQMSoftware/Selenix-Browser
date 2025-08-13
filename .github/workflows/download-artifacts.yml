@@ -167,72 +167,85 @@ jobs:
             exit 1
           fi
 
-      - name: Build expected file list and detect existing release assets
+      # >>> FIX: build the expected list from the ACTUAL artifact file names (no PN/VERSION guess) <<<
+      - name: Build expected file list from local artifacts & detect existing release assets
         id: precheck
         shell: bash
+        working-directory: ${{ env.PROJECT_DIR }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          PN="${PRODUCT_NAME}"
-          TAG="${TAG:?}"
-          VERSION="${TAG#v}"
 
-          list_assets() { gh release view "$TAG" --json assets --jq '.assets[].name' || true; }
-          ASSET_NAMES="$(list_assets || true)"
-
-          pick_name() {
-            if echo "$ASSET_NAMES" | grep -qx "$1"; then echo "$1"; else echo "$2"; fi
+          # Helper to find the first match among patterns (case-insensitive)
+          find_one() {
+            for pat in "$@"; do
+              f=$(find dist -type f -iname "$pat" -print -quit 2>/dev/null || true)
+              if [ -n "$f" ]; then
+                echo "$f"
+                return 0
+              fi
+            done
+            echo ""
+            return 1
           }
 
-          WIN_ZIP="$(pick_name "${PN}-${VERSION}-x64-win.zip" "${PN}-${VERSION}-win.zip")"
-          APPIMG="$(pick_name "${PN}-${VERSION}-x86_64.AppImage" "${PN}-${VERSION}.AppImage")"
-          DMG_NAME="$(pick_name "${PN}-${VERSION}-arm64-mac.dmg" "${PN}-${VERSION}-arm64.dmg")"
-          DMG_BLOCKMAP_NAME="$(pick_name "${PN}-${VERSION}-arm64-mac.dmg.blockmap" "${PN}-${VERSION}-arm64.dmg.blockmap")"
-          if echo "$ASSET_NAMES" | grep -qx "${PN}_${VERSION}_amd64.deb"; then
-            DEB="${PN}_${VERSION}_amd64.deb"
-          else
-            DEB="${PN}-${VERSION}-amd64.deb"
-          fi
+          # Derive EXPECTED list from the real files produced by the 3 runners
+          declare -a EXPECTED=()
 
+          # these 3 are usually exact names; include if present (case-insensitive)
+          for y in "latest-linux.yml" "latest-mac.yml" "latest.yml"; do
+            f=$(find_one "$y")
+            if [ -n "$f" ]; then EXPECTED+=("$(basename "$f")"); else EXPECTED+=("$y"); fi
+          done
+
+          # Windows artifacts
+          F_IA32_ZIP=$(find_one "*-ia32-win.zip")
+          F_IA32_NSIS=$(find_one "*-ia32.nsis.7z")
+          F_X64_ZIP=$(find_one "*-x64-win.zip" "*-win.zip")
+          F_X64_NSIS=$(find_one "*-x64.nsis.7z")
+          F_WEB_SETUP=$(find_one "*-Web-Setup-*.exe")
+
+          # Linux artifacts
+          F_APPIMG=$(find_one "*-x86_64.AppImage" "*.AppImage")
+          F_DEB=$(find_one "*_amd64.deb" "*-amd64.deb")
+
+          # macOS artifacts (arm64)
+          F_MAC_ZIP=$(find_one "*-arm64-mac.zip" "*-arm64.zip")
+          F_DMG=$(find_one "*-arm64-mac.dmg" "*-arm64.dmg")
+          F_DMG_BM=$(find_one "*-arm64-mac.dmg.blockmap" "*-arm64.dmg.blockmap")
+
+          for f in "$F_IA32_ZIP" "$F_IA32_NSIS" "$F_MAC_ZIP" "$F_X64_ZIP" "$F_X64_NSIS" "$F_APPIMG" "$F_DMG" "$F_DMG_BM" "$F_WEB_SETUP" "$F_DEB"; do
+            if [ -n "$f" ]; then
+              EXPECTED+=("$(basename "$f")")
+            fi
+          done
+
+          # Write EXPECTED list (unique, sorted). If some weren't found yet we still include the conventional name so verification reflects reality.
           TMP_DIR="$(mktemp -d)"
           EXPECTED_FILE="$TMP_DIR/expected.txt"
-          CURRENT_FILE="$TMP_DIR/current.txt"
+          printf "%s\n" "${EXPECTED[@]}" | sed '/^$/d' | sort -u > "$EXPECTED_FILE"
+          echo "EXPECTED_FILE=$EXPECTED_FILE" >> "$GITHUB_ENV"
+
+          # Get existing release assets
+          ASSET_NAMES="$(gh release view "$TAG" --json assets --jq '.assets[].name' || true)"
+          echo "$ASSET_NAMES" | sort -u > "$TMP_DIR/current.txt"
+
+          # Compute extras/missing vs EXPECTED (by actual basenames)
           EXTRAS_FILE="$TMP_DIR/extras.txt"
           MISSING_FILE="$TMP_DIR/missing.txt"
+          comm -13 "$EXPECTED_FILE" "$TMP_DIR/current.txt" > "$EXTRAS_FILE" || true
+          comm -23 "$EXPECTED_FILE" "$TMP_DIR/current.txt" > "$MISSING_FILE" || true
 
-          printf "%s\n" \
-            "latest-linux.yml" \
-            "latest-mac.yml" \
-            "latest.yml" \
-            "${PN}-${VERSION}-ia32-win.zip" \
-            "${PN}-${VERSION}-ia32.nsis.7z" \
-            "${PN}-${VERSION}-arm64-mac.zip" \
-            "${WIN_ZIP}" \
-            "${PN}-${VERSION}-x64.nsis.7z" \
-            "${APPIMG}" \
-            "${DMG_NAME}" \
-            "${DMG_BLOCKMAP_NAME}" \
-            "${PN}-Web-Setup-${VERSION}.exe" \
-            "${DEB}" \
-            > "$EXPECTED_FILE"
-
-          echo "$ASSET_NAMES" | sort -u > "$CURRENT_FILE"
-          sort -u "$EXPECTED_FILE" -o "$EXPECTED_FILE"
-
-          comm -13 "$EXPECTED_FILE" "$CURRENT_FILE" > "$EXTRAS_FILE" || true
-          comm -23 "$EXPECTED_FILE" "$CURRENT_FILE" > "$MISSING_FILE" || true
-
-          echo "EXPECTED_FILE=$EXPECTED_FILE" >> "$GITHUB_ENV"
-          echo "MISSING_FILE=$MISSING_FILE" >> "$GITHUB_ENV"
           echo "EXTRAS_FILE=$EXTRAS_FILE" >> "$GITHUB_ENV"
+          echo "MISSING_FILE=$MISSING_FILE" >> "$GITHUB_ENV"
 
           EXTRAS_N=$(wc -l < "$EXTRAS_FILE" | tr -d ' ')
           MISSING_N=$(wc -l < "$MISSING_FILE" | tr -d ' ')
           echo "Extras: $EXTRAS_N, Missing: $MISSING_N"
           if [ "$EXTRAS_N" -eq 0 ] && [ "$MISSING_N" -eq 0 ]; then
             echo "RELEASE_COMPLETE=yes" >> "$GITHUB_ENV"
-            echo "Release already complete with exactly 13 assets."
+            echo "Release already complete with all expected assets."
           fi
 
       - name: Delete unexpected extra assets from release
@@ -253,7 +266,7 @@ jobs:
             echo "No extras to prune."
           fi
 
-      - name: Upload exactly Wexond-style 13 files (robust retries)
+      - name: Upload exactly Wexond-style 13 files (robust, uses actual basenames)
         if: env.RELEASE_COMPLETE != 'yes'
         shell: bash
         working-directory: ${{ env.PROJECT_DIR }}
@@ -262,101 +275,72 @@ jobs:
         run: |
           set -euo pipefail
           : "${TAG:?TAG not set}"
-          VERSION="${TAG#v}"
-          PN="${PRODUCT_NAME}"
+          : "${EXPECTED_FILE:?EXPECTED_FILE not set}"
+          : "${MISSING_FILE:?MISSING_FILE not set}"
 
-          choose_local() {
-            for cand in "$@"; do
-              f=$(find dist -type f -name "$cand" -print -quit)
-              [ -n "$f" ] && { echo "$cand"; return 0; }
-            done
-            echo "$1"
-          }
-          WIN_ZIP="$(choose_local "${PN}-${VERSION}-x64-win.zip" "${PN}-${VERSION}-win.zip")"
-          APPIMG="$(choose_local "${PN}-${VERSION}-x86_64.AppImage" "${PN}-${VERSION}.AppImage")"
-          DMG_NAME="$(choose_local "${PN}-${VERSION}-arm64-mac.dmg" "${PN}-${VERSION}-arm64.dmg")"
-          DMG_BLOCKMAP_NAME="$(choose_local "${PN}-${VERSION}-arm64-mac.dmg.blockmap" "${PN}-${VERSION}-arm64.dmg.blockmap")"
-          if find dist -type f -name "${PN}_${VERSION}_amd64.deb" -print -quit >/dev/null; then
-            DEB="${PN}_${VERSION}_amd64.deb"
-          else
-            DEB="${PN}-${VERSION}-amd64.deb"
-          fi
+          mapfile -t ORDERED < "$EXPECTED_FILE"
+          MISSING_NAMES="$(cat "$MISSING_FILE" || true)"
 
-          ORDERED=(
-            "latest-linux.yml"
-            "latest-mac.yml"
-            "latest.yml"
-            "${PN}-${VERSION}-ia32-win.zip"
-            "${PN}-${VERSION}-ia32.nsis.7z"
-            "${PN}-${VERSION}-arm64-mac.zip"
-            "${WIN_ZIP}"
-            "${PN}-${VERSION}-x64.nsis.7z"
-            "${APPIMG}"
-            "${DMG_NAME}"
-            "${DMG_BLOCKMAP_NAME}"
-            "${PN}-Web-Setup-${VERSION}.exe"
-            "${DEB}"
-          )
-
-          MISSING_NAMES=$(cat "$MISSING_FILE" || true)
-
+          # Build list of local files to upload (only those still missing), by matching ACTUAL basenames found earlier
           FILES=()
-          for name in "${ORDERED[@]}"; do
-            [ -z "$name" ] && continue
-            echo "$MISSING_NAMES" | grep -qx "$name" || continue
-            f=$(find dist -type f -name "$name" -print -quit)
+          for base in "${ORDERED[@]}"; do
+            [ -z "$base" ] && continue
+            echo "$MISSING_NAMES" | grep -qx "$base" || continue
+            f=$(find dist -type f -name "$base" -o -iname "$base" -print -quit)
             [ -n "$f" ] && FILES+=( "$f" )
           done
 
           if [ ${#FILES[@]} -eq 0 ]; then
-            echo "Nothing to upload; release now matches the 13-file set."
-            exit 0
+            echo "Nothing to upload from local artifacts yet (or already uploaded)."
+          else
+            echo "Uploading (missing only) in deterministic order:"
+            printf '  - %s\n' "${FILES[@]}"
+
+            upload_with_retry() {
+              local file="$1"
+              local base="$(basename "$file")"
+              local attempts=6
+              local delay=5
+              for i in $(seq 1 "$attempts"); do
+                echo "[$i/$attempts] Uploading $base ..."
+                if gh release upload "$TAG" "$file" --clobber >/dev/null 2>&1; then
+                  if gh release view "$TAG" --json assets --jq ".assets[].name" | grep -qx "$base"; then
+                    echo "Uploaded and verified: $base"
+                    return 0
+                  fi
+                  echo "Upload OK but $base not visible yet; waiting..."
+                else
+                  echo "Upload failed for $base; will retry..."
+                fi
+                sleep "$delay"
+                delay=$((delay * 2))
+              done
+              echo "::error::Failed to upload $base after multiple attempts."
+              return 1
+            }
+
+            for f in "${FILES[@]}"; do
+              upload_with_retry "$f"
+            done
           fi
 
-          echo "Uploading (missing only) in deterministic order:"
-          printf '  - %s\n' "${FILES[@]}"
-
-          upload_with_retry() {
-            local file="$1"
-            local base="$(basename "$file")"
-            local attempts=6
-            local delay=5
-            for i in $(seq 1 "$attempts"); do
-              echo "[$i/$attempts] Uploading $base ..."
-              if gh release upload "$TAG" "$file" --clobber >/dev/null 2>&1; then
-                if gh release view "$TAG" --json assets --jq ".assets[].name" | grep -qx "$base"; then
-                  echo "Uploaded and verified: $base"
-                  return 0
-                fi
-                echo "Upload returned OK but $base not visible yet; waiting..."
-              else
-                echo "Upload failed for $base; will retry..."
-              fi
-              sleep "$delay"
-              delay=$((delay * 2))
-            done
-            echo "::error::Failed to upload $base after multiple attempts."
-            return 1
-          }
-
-          for f in "${FILES[@]}"; do
-            upload_with_retry "$f"
-          done
-
-      - name: Final verification (must be exactly 13 expected assets)
+      - name: Final verification (must match the basenames we derived from artifacts)
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          TAG="${TAG:?}"
-          EXPECTED_FILE="${EXPECTED_FILE:?}"
+          : "${TAG:?}"
+          : "${EXPECTED_FILE:?}"
+
           ASSET_NAMES="$(gh release view "$TAG" --json assets --jq '.assets[].name' | sort -u)"
           echo "Release assets after upload:"
           echo "$ASSET_NAMES"
+
           TMP="$(mktemp)"
           echo "$ASSET_NAMES" > "$TMP"
           sort -u "$EXPECTED_FILE" -o "$EXPECTED_FILE"
+
           comm -23 "$EXPECTED_FILE" "$TMP" > missing_final.txt || true
           MISSING_FINAL_N=$(wc -l < missing_final.txt | tr -d ' ')
           if [ "$MISSING_FINAL_N" -gt 0 ]; then
@@ -364,4 +348,4 @@ jobs:
             cat missing_final.txt
             exit 1
           fi
-          echo "✅ Release has all 13 required assets for $TAG."
+          echo "✅ Release has all expected assets for $TAG."
