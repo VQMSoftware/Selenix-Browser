@@ -58,7 +58,18 @@ export class Store {
   }
 
   @observable
-  public changeImageDaily = true;
+  private _changeImageDaily = true;
+
+  public get changeImageDaily() { return this._changeImageDaily; }
+  public set changeImageDaily(value: boolean) {
+    this._changeImageDaily = value;
+    try { localStorage.setItem('changeImageDaily', JSON.stringify(value)); } catch {}
+    if (value) {
+      try { localStorage.removeItem('imageURL'); localStorage.removeItem('imageDate'); } catch {}
+      this.image = '';
+      if (this.imageVisible) this.loadImage();
+    }
+  }
 
   @observable
   public topSitesVisible = true;

@@ -57,6 +57,40 @@ export const SwitchItem = observer(
 );
 
 export const Preferences = observer(() => {
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+
+  const onPickCustomImage = () => {
+    if (!store.imageVisible || store.changeImageDaily) return;
+    fileInputRef.current?.click();
+  };
+
+  const onCustomFileChange: React.ChangeEventHandler<HTMLInputElement> = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    try {
+      // read as data URL to persist
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = String(reader.result || '');
+        try {
+          localStorage.setItem('imageURL', dataUrl);
+          localStorage.setItem('imageDate', new Date().toString());
+        } catch (err) {
+          // ignore quota errors
+        }
+        // immediately apply without waiting for reload
+        store.image = dataUrl;
+        store.preset = 'custom';
+      };
+      reader.readAsDataURL(file);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      // reset input so the same file can be chosen again
+      e.currentTarget.value = '';
+    }
+  };
+
   return (
     <ContextMenu
       translucent
@@ -157,8 +191,16 @@ export const Preferences = observer(() => {
           <ContextMenuItem
             bigger
             disabled={!store.imageVisible || store.changeImageDaily}
+            onClick={onPickCustomImage}
           >
-            Choose image...
+            Choose custom image
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              style={{ display: 'none' }}
+              onChange={onCustomFileChange}
+            />
           </ContextMenuItem>
           <ContextMenuSeparator bigger></ContextMenuSeparator>
           <SwitchItem name="topSitesVisible">Show top sites</SwitchItem>
