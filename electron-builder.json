@@ -13,7 +13,8 @@
   "files": [
     "build/**/*",
     "package.json",
-    "static/**/*"
+    "static/**/*",
+    "node_modules/**/*"
   ],
 
   "win": {
