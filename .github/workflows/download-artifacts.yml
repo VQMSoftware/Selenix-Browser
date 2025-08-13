@@ -75,7 +75,7 @@ jobs:
           fi
           echo "Context: TAG=$TAG SHA=$SHA RUN_ID=${RUN_ID:-unset}"
 
-      # >>> dynamic wait until ALL 3 matrix artifacts exist <<<
+      # Wait dynamically (no fixed timeout) for ALL 3 matrix artifacts to exist
       - name: Wait for all Build artifacts (Linux, macOS, Windows)
         shell: bash
         env:
@@ -85,7 +85,6 @@ jobs:
 
           # Resolve RUN_ID if not present (tag path)
           if [ -z "${RUN_ID:-}" ]; then
-            # find the latest successful Build run for this tag/sha
             RUN_ID="$(
               gh run list \
                 --workflow "Build" \
@@ -112,25 +111,27 @@ jobs:
           echo "Waiting for artifacts on run $RUN_ID ..."
           PN="${PRODUCT_NAME}"
 
-          # expected artifact names from the 3 matrix machines (exact, from build.yml)
-          WANT_1="${PN}-Linux-artifacts"
-          WANT_2="${PN}-macOS-artifacts"
-          WANT_3="${PN}-Windows-artifacts"
+          # exact artifact names from Build matrix
+          WANT_L="${PN}-Linux-artifacts"
+          WANT_M="${PN}-macOS-artifacts"
+          WANT_W="${PN}-Windows-artifacts"
 
-          # poll until all three are present (no hard timeout; prints heartbeat)
+          # poll until all three are present (no hard timeout)
           i=0
           while :; do
-            ART="$(gh api repos/${{ github.repository }}/actions/runs/$RUN_ID/artifacts --jq '.artifacts[] | {name:.name, expired:.expired, size:.size_in_bytes}')" || ART=""
-            NAMES="$(echo "$ART" | jq -r 'select(.expired==false) | .name' || true)"
-
+            # list non-expired artifact names (one per line)
+            NAMES="$(gh api repos/${{ github.repository }}/actions/runs/$RUN_ID/artifacts --jq '.artifacts[] | select(.expired==false) | .name' -q '.[]?' || true)"
             echo "Visible artifacts:"
-            echo "${NAMES:-<none>}"
+            printf '%s\n' "${NAMES:-<none>}"
 
-            HAVE_L=$(echo "$NAMES" | grep -Fx "$WANT_1" || true)
-            HAVE_M=$(echo "$NAMES" | grep -Fx "$WANT_2" || true)
-            HAVE_W$(echo "$NAMES" | grep -Fx "$WANT_3" || true) || true
+            HAVE_L=
+            HAVE_M=
+            HAVE_W=
+            grep -Fqx "$WANT_L" <<< "${NAMES:-}" && HAVE_L=1 || true
+            grep -Fqx "$WANT_M" <<< "${NAMES:-}" && HAVE_M=1 || true
+            grep -Fqx "$WANT_W" <<< "${NAMES:-}" && HAVE_W=1 || true
 
-            if [ -n "$HAVE_L" ] && [ -n "$HAVE_M" ] && [ -n "$HAVE_W" ]; then
+            if [ -n "${HAVE_L:-}" ] && [ -n "${HAVE_M:-}" ] && [ -n "${HAVE_W:-}" ]; then
               echo "All three artifacts are available."
               break
             fi
