@@ -22,6 +22,12 @@ jobs:
       group: download-artifacts-${{ github.ref }}
       cancel-in-progress: true
 
+    env:
+      # How long to wait (max) for the matching Build run to appear/finish on tag pushes.
+      # 100 attempts * 15s = 1500s ≈ 25 minutes.
+      BUILD_RUN_ATTEMPTS: "100"
+      BUILD_RUN_SLEEP_SECS: "15"
+
     steps:
       - name: Checkout (for config)
         uses: actions/checkout@v4
@@ -61,59 +67,80 @@ jobs:
           fi
           gh --version
 
-      - name: Context from workflow_run
-        if: github.event_name == 'workflow_run'
+      - name: Establish TAG/SHA/RUN_ID from context
+        id: establish
         shell: bash
         run: |
-          echo "RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
-          echo "TAG=${{ github.event.workflow_run.head_branch }}" >> "$GITHUB_ENV"
-          echo "SHA=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_ENV"
-          echo "Using run_id=$RUN_ID tag=$TAG sha=$SHA from workflow_run"
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            echo "RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+            echo "TAG=${{ github.event.workflow_run.head_branch }}" >> "$GITHUB_ENV"
+            echo "SHA=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_ENV"
+            echo "Using workflow_run context -> run_id=$RUN_ID tag=$TAG sha=$SHA"
+          else
+            echo "TAG=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
+            echo "SHA=${GITHUB_SHA}" >> "$GITHUB_ENV"
+            echo "Using push context -> tag=${GITHUB_REF_NAME} sha=${GITHUB_SHA}"
+          fi
 
-      - name: Find matching Build run for this tag (≤60s)
-        if: github.event_name != 'workflow_run'
+      - name: Resolve/await matching Build run (robust)
+        if: env.RUN_ID == ''
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          TAG="${GITHUB_REF_NAME}"
-          SHA="${GITHUB_SHA}"
-          echo "Tag: $TAG"
-          echo "SHA: $SHA"
+          TAG="${TAG:?TAG not set}"
+          SHA="${SHA:?SHA not set}"
+          ATTEMPTS="${BUILD_RUN_ATTEMPTS:-100}"
+          SLEEP_SECS="${BUILD_RUN_SLEEP_SECS:-15}"
 
-          ATTEMPTS=5
-          SLEEP_SECS=12
+          echo "Looking for successful 'Build' run for tag=$TAG or sha=$SHA"
           RUN_ID=""
 
-          for i in $(seq 1 $ATTEMPTS); do
-            RUN_ID="$(
-              gh run list \
-                --workflow "Build" \
-                --json databaseId,headSha,headBranch,conclusion,createdAt \
-                --limit 100 | \
-              node -e '
-                let s=""; process.stdin.on("data",d=>s+=d);
-                process.stdin.on("end",()=>{
-                  const arr=JSON.parse(s);
-                  const sha=process.env.SHA;
-                  const tag=process.env.TAG;
-                  const run=arr.find(r=>r.conclusion==="success" && (r.headSha===sha || r.headBranch===tag));
-                  if(run){ process.stdout.write(String(run.databaseId)); }
-                });
-              '
-            )" || true
-            [ -n "$RUN_ID" ] && break
+          find_run() {
+            gh run list \
+              --workflow "Build" \
+              --json databaseId,headSha,headBranch,status,conclusion,createdAt \
+              --limit 200 | \
+            node -e '
+              let s=""; process.stdin.on("data",d=>s+=d);
+              process.stdin.on("end",()=>{
+                const arr=JSON.parse(s);
+                const sha=process.env.SHA;
+                const tag=process.env.TAG;
+                // Prefer exact SHA; else match by tag name
+                const bySha = arr.find(r => r.headSha === sha);
+                const byTag = arr.find(r => r.headBranch === tag);
+                const run = bySha || byTag;
+                if (run) process.stdout.write(String(run.databaseId));
+              });
+            '
+          }
+
+          for i in $(seq 1 "$ATTEMPTS"); do
+            RUN_ID="$(find_run || true)"
+            if [ -n "$RUN_ID" ]; then
+              echo "Found Build run id: $RUN_ID (attempt $i/$ATTEMPTS)"
+              break
+            fi
+            echo "Build run not found yet; sleeping ${SLEEP_SECS}s..."
             sleep "$SLEEP_SECS"
           done
 
           if [ -z "$RUN_ID" ]; then
-            echo "::error::No successful 'Build' run found for tag/sha."
+            echo "::error::No 'Build' run found for tag/sha after waiting."
             exit 1
           fi
 
           echo "RUN_ID=$RUN_ID" >> "$GITHUB_ENV"
-          echo "TAG=$TAG" >> "$GITHUB_ENV"
+
+          # Now ensure it finishes successfully. If still running, this will wait.
+          echo "Waiting for Build run $RUN_ID to complete..."
+          if ! gh run watch "$RUN_ID" --exit-status; then
+            echo "::error::Build run $RUN_ID did not succeed."
+            exit 1
+          fi
+          echo "Build run $RUN_ID completed successfully."
 
       - name: Download all artifacts from Build run
         shell: bash
@@ -131,7 +158,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          : "${TAG:=${GITHUB_REF_NAME}}"
           : "${TAG:?TAG not set}"
           if ! gh release view "$TAG" >/dev/null 2>&1; then
             echo "::error::No GitHub Release found for tag '$TAG'. Create it first, then re-run."
@@ -162,9 +188,6 @@ jobs:
           }
 
           # Compute canonical candidates but pick from what actually exists LOCALLY.
-          files_to_upload=()
-
-          # YMLs (always clobber later)
           yml_linux=$(first_match "latest-linux.yml" || true)
           yml_mac=$(first_match "latest-mac.yml" || true)
           yml_win=$(first_match "latest.yml" || true)
@@ -202,16 +225,6 @@ jobs:
             "$deb"
           )
 
-          # If you want to strictly enforce "exactly 13", uncomment this guard:
-          # missing_count=0
-          # for idx in "${!order[@]}"; do [ -z "${order[$idx]}" ] && missing_count=$((missing_count+1)); done
-          # if [ $missing_count -gt 0 ]; then
-          #   echo "::warning::Build did not produce $missing_count of the 13 canonical artifacts; uploading what exists."
-          # fi
-
-          # Upload logic:
-          # - latest*.yml use --clobber to ensure they always update
-          # - others: upload if not already present, fall back to --clobber if needed
           echo "Uploading in deterministic order (skipping missing):"
           for f in "${order[@]}"; do
             [ -z "$f" ] && continue
@@ -220,9 +233,7 @@ jobs:
             if [[ "$base" == latest*.yml ]]; then
               gh release upload "$TAG" "$f" --clobber || true
             else
-              # Try upload without clobber first
               if ! gh release upload "$TAG" "$f"; then
-                # If it exists, clobber to refresh content
                 gh release upload "$TAG" "$f" --clobber || true
               fi
             fi
