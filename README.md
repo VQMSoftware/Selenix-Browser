@@ -32,7 +32,7 @@ As developers, many of us have attempted to compile Chromium from source, only t
 
 # Features
 
-- **selenix Shield** - Browse the web without any ads and don't allow websites to track you. Thanks to the selenixShield powered by [ghostery](https://github.com/ghostery/adblocker), websites can load even 8 times faster!
+- **selenix Shield** - Browse the web without any ads and don't allow websites to track you. Thanks to the selenix Shield powered by [ghostery](https://github.com/ghostery/adblocker), websites can load even 8 times faster!
 - **Chromium without Google services and low resources usage** - Since selenixuses Electron and wexond under the hood which is based on only several and the most important Chromium components, it's not bloated with redundant Google tracking services and others.
 - **Fast and fluent UI** - The animations are really smooth and their timings are perfectly balanced.
 - **Highly customizable new tab page** - Customize almost an every aspect of the new tab page!
