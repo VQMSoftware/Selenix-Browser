@@ -1,6 +1,7 @@
 /* eslint-disable */
 const { getConfig, dev } = require('./webpack.config.base');
 const { spawn, execSync } = require('child_process');
+const path = require('path');
 const CopyPlugin = require('copy-webpack-plugin');
 const { BundleAnalyzerPlugin } = require('webpack-bundle-analyzer');
 const ForkTsCheckerWebpackPlugin = require('fork-ts-checker-webpack-plugin');
@@ -25,14 +26,11 @@ const mainConfig = getConfig({
     new CopyPlugin({
       patterns: [
         {
-          from:
-            'node_modules/@cliqz/adblocker-electron-preload/dist/preload.cjs.js',
+          // Use the package's exported entry (no subpath) to satisfy "exports"
+          from: require.resolve('@ghostery/adblocker-electron-preload'),
           to: 'preload.js',
-          transform: async (fileContent, path) => {
-            return (
-              await terser.minify(fileContent.toString())
-            ).code.toString();
-          },
+          transform: async (fileContent) =>
+            (await terser.minify(fileContent.toString())).code.toString(),
         },
       ],
     }),
@@ -50,13 +48,23 @@ const preloadConfig = getConfig({
     'view-preload': './src/preloads/view-preload',
   },
 
-  plugins: [],
+  plugins: [
+    new ForkTsCheckerWebpackPlugin({
+      async: dev,
+      typescript: {
+        memoryLimit: 4096,
+        mode: 'readonly',
+        configFile: 'tsconfig.json',
+        typescriptPath: require.resolve('typescript'),
+      },
+    }),
+    ...(process.env.ANALYZE ? [new BundleAnalyzerPlugin()] : []),
+  ],
 });
 
 if (process.env.ENABLE_EXTENSIONS) {
   preloadConfig.entry['popup-preload'] = './src/preloads/popup-preload';
-  preloadConfig.entry['extensions-preload'] =
-    './src/preloads/extensions-preload';
+  preloadConfig.entry['extensions-preload'] = './src/preloads/extensions-preload';
 }
 
 if (process.env.START === '1') {
@@ -70,7 +78,6 @@ if (process.env.START === '1') {
             } else {
               electronProcess.kill();
             }
-
             electronProcess = null;
           } catch (e) {}
         }
