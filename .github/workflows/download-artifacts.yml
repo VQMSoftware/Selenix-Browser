@@ -1,3 +1,5 @@
+# workflow for downloading and pushing artifacts when there is a release.
+
 name: download-artifacts
 
 on:
