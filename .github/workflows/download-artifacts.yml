@@ -75,7 +75,7 @@ jobs:
           fi
           echo "Context: TAG=$TAG SHA=$SHA RUN_ID=${RUN_ID:-unset}"
 
-      # Wait dynamically (no fixed timeout) for ALL 3 matrix artifacts to exist
+      # Fast, quiet, **correct** wait until all three artifacts are listed by API
       - name: Wait for all Build artifacts (Linux, macOS, Windows)
         shell: bash
         env:
@@ -108,21 +108,17 @@ jobs:
             echo "RUN_ID=$RUN_ID" >> "$GITHUB_ENV"
           fi
 
-          echo "Waiting for artifacts on run $RUN_ID ..."
           PN="${PRODUCT_NAME}"
-
-          # exact artifact names from Build matrix
           WANT_L="${PN}-Linux-artifacts"
           WANT_M="${PN}-macOS-artifacts"
           WANT_W="${PN}-Windows-artifacts"
 
-          # poll until all three are present (no hard timeout)
+          echo "Waiting for artifacts on run $RUN_ID ..."
           i=0
           while :; do
-            # list non-expired artifact names (one per line)
-            NAMES="$(gh api repos/${{ github.repository }}/actions/runs/$RUN_ID/artifacts --jq '.artifacts[] | select(.expired==false) | .name' -q '.[]?' || true)"
-            echo "Visible artifacts:"
-            printf '%s\n' "${NAMES:-<none>}"
+            # exactly the three names (one per line), no giant JSON dump
+            NAMES="$(gh api repos/${{ github.repository }}/actions/runs/$RUN_ID/artifacts \
+              --jq '.artifacts[] | select(.expired==false) | .name' 2>/dev/null || true)"
 
             HAVE_L=
             HAVE_M=
@@ -131,16 +127,18 @@ jobs:
             grep -Fqx "$WANT_M" <<< "${NAMES:-}" && HAVE_M=1 || true
             grep -Fqx "$WANT_W" <<< "${NAMES:-}" && HAVE_W=1 || true
 
+            echo "found: L=${HAVE_L:+yes}${HAVE_L:-no} M=${HAVE_M:+yes}${HAVE_M:-no} W=${HAVE_W:+yes}${HAVE_W:-no}"
+
             if [ -n "${HAVE_L:-}" ] && [ -n "${HAVE_M:-}" ] && [ -n "${HAVE_W:-}" ]; then
-              echo "All three artifacts are available."
               break
             fi
 
             i=$((i+1))
-            if [ $((i % 12)) -eq 0 ]; then
-              echo "Still waiting... ($(date -u +%H:%M:%S) UTC)"
+            # brief heartbeat each ~20s, otherwise stay quiet
+            if [ $((i % 4)) -eq 0 ]; then
+              echo "still waiting... ($(date -u +%H:%M:%S) UTC)"
             fi
-            sleep 10
+            sleep 5
           done
 
       - name: Download all artifacts from Build run
