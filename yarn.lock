@@ -1554,16 +1554,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@types/readable-stream@npm:^2.3.9":
-  version: 2.3.9
-  resolution: "@types/readable-stream@npm:2.3.9"
-  dependencies:
-    "@types/node": "npm:*"
-    safe-buffer: "npm:*"
-  checksum: 10c0/4204fb9362171c623929754e92edcccce07978191c87419fd028553b79d6bda9433e8e1ff859fefefd19c6ff0c3bd234f69d1a33a0cdd14265eaf6f3ef410bad
-  languageName: node
-  linkType: hard
-
 "@types/responselike@npm:^1.0.0":
   version: 1.0.3
   resolution: "@types/responselike@npm:1.0.3"
@@ -4213,7 +4203,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"enhanced-resolve@npm:^5.17.2":
+"enhanced-resolve@npm:^5.0.0, enhanced-resolve@npm:^5.17.2":
   version: 5.18.3
   resolution: "enhanced-resolve@npm:5.18.3"
   dependencies:
@@ -4986,30 +4976,6 @@ __metadata:
   dependencies:
     flat-cache: "npm:^4.0.0"
   checksum: 10c0/9e2b5938b1cd9b6d7e3612bdc533afd4ac17b2fc646569e9a8abbf2eb48e5eb8e316bc38815a3ef6a1b456f4107f0d0f055a614ca613e75db6bf9ff4d72c1638
-  languageName: node
-  linkType: hard
-
-"file-loader@npm:^6.2.0":
-  version: 6.2.0
-  resolution: "file-loader@npm:6.2.0"
-  dependencies:
-    loader-utils: "npm:^2.0.0"
-    schema-utils: "npm:^3.0.0"
-  peerDependencies:
-    webpack: ^4.0.0 || ^5.0.0
-  checksum: 10c0/e176a57c2037ab0f78e5755dbf293a6b7f0f8392350a120bd03cc2ce2525bea017458ba28fea14ca535ff1848055e86d1a3a216bdb2561ef33395b27260a1dd3
-  languageName: node
-  linkType: hard
-
-"file-type@npm:16.2.0":
-  version: 16.2.0
-  resolution: "file-type@npm:16.2.0"
-  dependencies:
-    readable-web-to-node-stream: "npm:^3.0.0"
-    strtok3: "npm:^6.0.3"
-    token-types: "npm:^2.0.0"
-    typedarray-to-buffer: "npm:^3.1.5"
-  checksum: 10c0/e47e853ebd871f3db4fd6b2224fce7dc34ca137395ff0fbbbc1650e9d3fe57cf7adefebc13bc2159c32d75154715d1e8f156549d68721058c9d28964361383c4
   languageName: node
   linkType: hard
 
@@ -8675,7 +8641,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"readable-stream@npm:^3.0.6, readable-stream@npm:^3.1.1, readable-stream@npm:^3.6.0":
+"readable-stream@npm:^3.0.6, readable-stream@npm:^3.1.1":
   version: 3.6.0
   resolution: "readable-stream@npm:3.6.0"
   dependencies:
@@ -8701,16 +8667,6 @@ __metadata:
   version: 2.0.0
   resolution: "readable-web-to-node-stream@npm:2.0.0"
   checksum: 10c0/a1fa1a789ba0cf8accae60cbfee71e7267ecb8b4e5fc6ece89c2b1151681a216167b524bbb79d1976717e80662e43d82fd597f8f5580c15f27aa37d33602023f
-  languageName: node
-  linkType: hard
-
-"readable-web-to-node-stream@npm:^3.0.0":
-  version: 3.0.1
-  resolution: "readable-web-to-node-stream@npm:3.0.1"
-  dependencies:
-    "@types/readable-stream": "npm:^2.3.9"
-    readable-stream: "npm:^3.6.0"
-  checksum: 10c0/54483297842d7ce068f5eb075e30c1de0e64cfdf6beb3491ae694ea5b65a9283b853b46c53c73268d34a002739bef843123ac5c317f09057debad19f1a28c72d
   languageName: node
   linkType: hard
 
@@ -9020,17 +8976,17 @@ __metadata:
   languageName: node
   linkType: hard
 
-"safe-buffer@npm:*, safe-buffer@npm:5.2.1, safe-buffer@npm:>=5.1.0, safe-buffer@npm:^5.1.0, safe-buffer@npm:~5.2.0":
-  version: 5.2.1
-  resolution: "safe-buffer@npm:5.2.1"
-  checksum: 10c0/6501914237c0a86e9675d4e51d89ca3c21ffd6a31642efeba25ad65720bce6921c9e7e974e5be91a786b25aa058b5303285d3c15dbabf983a919f5f630d349f3
-  languageName: node
-  linkType: hard
-
 "safe-buffer@npm:5.1.2, safe-buffer@npm:~5.1.0, safe-buffer@npm:~5.1.1":
   version: 5.1.2
   resolution: "safe-buffer@npm:5.1.2"
   checksum: 10c0/780ba6b5d99cc9a40f7b951d47152297d0e260f0df01472a1b99d4889679a4b94a13d644f7dbc4f022572f09ae9005fa2fbb93bbbd83643316f365a3e9a45b21
+  languageName: node
+  linkType: hard
+
+"safe-buffer@npm:5.2.1, safe-buffer@npm:>=5.1.0, safe-buffer@npm:^5.1.0, safe-buffer@npm:~5.2.0":
+  version: 5.2.1
+  resolution: "safe-buffer@npm:5.2.1"
+  checksum: 10c0/6501914237c0a86e9675d4e51d89ca3c21ffd6a31642efeba25ad65720bce6921c9e7e974e5be91a786b25aa058b5303285d3c15dbabf983a919f5f630d349f3
   languageName: node
   linkType: hard
 
@@ -9180,8 +9136,6 @@ __metadata:
     eslint-config-prettier: "npm:10.1.8"
     eslint-plugin-prettier: "npm:5.5.4"
     eslint-plugin-react: "npm:7.37.5"
-    file-loader: "npm:^6.2.0"
-    file-type: "npm:16.2.0"
     fork-ts-checker-webpack-plugin: "npm:^9.1.0"
     html-webpack-plugin: "npm:^5.1.0"
     icojs: "npm:^0.16.0"
@@ -9201,9 +9155,9 @@ __metadata:
     rimraf: "npm:^3.0.2"
     source-map-support: "npm:^0.5.19"
     styled-components: "npm:^5.2.1"
-    terser: "npm:^5.6.0"
+    terser: "npm:^5.43.1"
     terser-webpack-plugin: "npm:^5.1.1"
-    ts-loader: "npm:^8.0.17"
+    ts-loader: "npm:^9.5.2"
     tsconfig-paths-webpack-plugin: "npm:^3.3.0"
     typescript: "npm:^5.9.2"
     typescript-plugin-styled-components: "npm:^3.0.0"
@@ -9664,6 +9618,13 @@ __metadata:
   version: 0.7.3
   resolution: "source-map@npm:0.7.3"
   checksum: 10c0/7d2ddb51f3d2451847692a9ac7808da2b2b3bf7aef92ece33128919040a7e74d9a5edfde7a781f035c974deff876afaf83f2e30484faffffb86484e7408f5d7c
+  languageName: node
+  linkType: hard
+
+"source-map@npm:^0.7.4":
+  version: 0.7.6
+  resolution: "source-map@npm:0.7.6"
+  checksum: 10c0/59f6f05538539b274ba771d2e9e32f6c65451982510564438e048bc1352f019c6efcdc6dd07909b1968144941c14015c2c7d4369fb7c4d7d53ae769716dcc16c
   languageName: node
   linkType: hard
 
@@ -10276,7 +10237,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"terser@npm:^5.31.1":
+"terser@npm:^5.31.1, terser@npm:^5.43.1":
   version: 5.43.1
   resolution: "terser@npm:5.43.1"
   dependencies:
@@ -10300,19 +10261,6 @@ __metadata:
   bin:
     terser: bin/terser
   checksum: 10c0/d01c66dc172489b21baacc6725230f88a57fde8601b3c76a1b001f5865d9486de1523463088209fafe2aea9536df209e8b8f7a5bc45b89efa74e562a353eb2ed
-  languageName: node
-  linkType: hard
-
-"terser@npm:^5.6.0":
-  version: 5.6.0
-  resolution: "terser@npm:5.6.0"
-  dependencies:
-    commander: "npm:^2.20.0"
-    source-map: "npm:~0.7.2"
-    source-map-support: "npm:~0.5.19"
-  bin:
-    terser: bin/terser
-  checksum: 10c0/82e6100693e42bd2442f016e221e55049fe55669843436167482e21f14df2fbd55ef32c133594d1f393ca2452a56913c8c370cd4416c3879824adf843bf9d3cd
   languageName: node
   linkType: hard
 
@@ -10462,19 +10410,19 @@ __metadata:
   languageName: node
   linkType: hard
 
-"ts-loader@npm:^8.0.17":
-  version: 8.0.17
-  resolution: "ts-loader@npm:8.0.17"
+"ts-loader@npm:^9.5.2":
+  version: 9.5.2
+  resolution: "ts-loader@npm:9.5.2"
   dependencies:
     chalk: "npm:^4.1.0"
-    enhanced-resolve: "npm:^4.0.0"
-    loader-utils: "npm:^2.0.0"
+    enhanced-resolve: "npm:^5.0.0"
     micromatch: "npm:^4.0.0"
     semver: "npm:^7.3.4"
+    source-map: "npm:^0.7.4"
   peerDependencies:
     typescript: "*"
-    webpack: "*"
-  checksum: 10c0/2cdb52c7cf094572de2aee0ed314e6aed821e279233cdf7ea14ef3d54e89f5fb49f5b25f5cd406883755365fb9c57fa3c415c733108c856d1eadce6fc17d6100
+    webpack: ^5.0.0
+  checksum: 10c0/d4f4e67f1365a8c4a929d26148611b6a82a9241bd988863386c9cc0c034eec8b14562206e09540fae38154595e0b3b9520b701b5c83c0e5d743c4016cd91d9f1
   languageName: node
   linkType: hard
 
