@@ -39,7 +39,7 @@ export class Store {
 
   public windowId = getCurrentWindow().id;
 
-  public barHideTimer = 0;
+  public barHideTimer: any = 0;
 
   public isIncognito = ipcRenderer.sendSync(`is-incognito-${this.windowId}`);
 

@@ -1,6 +1,12 @@
 import { ipcMain } from 'electron';
 import { parse } from 'url';
-// import { getPassword, setPassword, deletePassword } from 'keytar';
+// Optional keytar import with fallbacks so the app compiles even if keytar is not installed
+let _keytar: any = null;
+try { _keytar = require('keytar'); } catch {}
+const getPassword = async (service: string, account: string) => _keytar ? _keytar.getPassword(service, account) : null;
+const setPassword = async (service: string, account: string, password: string) => _keytar ? _keytar.setPassword(service, account, password) : null;
+const deletePassword = async (service: string, account: string) => _keytar ? _keytar.deletePassword(service, account) : null;
+
 
 import { AppWindow } from '../windows';
 import { Application } from '../application';

@@ -64,7 +64,9 @@ export class ExtensionsStore {
       )
         return;
 
-      const icon = window.URL.createObjectURL(new Blob([data]));
+      const buffer = data as Buffer;
+      const ab = new Uint8Array(buffer).slice().buffer as ArrayBuffer;
+      const icon = window.URL.createObjectURL(new Blob([ab]));
       const browserAction = new IBrowserAction({
         extensionId: extension.id,
         icon,

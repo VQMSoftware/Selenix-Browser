@@ -1,189 +1,267 @@
+// src/main/services/adblock.ts
 import { existsSync, promises as fs } from 'fs';
 import { resolve, join } from 'path';
-import fetch from 'node-fetch';
+import {
+  app,
+  session,
+  Session,
+  WebContents,
+  webContents,
+  ipcMain,
+} from 'electron';
+import type * as Ghostery from '@ghostery/adblocker-electron';
+import fetch from 'cross-fetch'; // required by Ghostery
 
-import { ElectronBlocker, Request } from '@cliqz/adblocker-electron';
 import { getPath } from '~/utils';
 import { Application } from '../application';
-import { ipcMain } from 'electron';
 
-export let engine: ElectronBlocker;
+// Ensure webpack doesn't inline a numeric module id when resolving paths in production.
+declare const __non_webpack_require__: NodeJS.Require | undefined;
+// eslint-disable-next-line @typescript-eslint/no-implied-eval
+const nodeRequire: NodeJS.Require =
+  (typeof __non_webpack_require__ !== 'undefined' && __non_webpack_require__)
+    ? __non_webpack_require__
+    : (eval('require') as NodeJS.Require);
 
-const PRELOAD_PATH = join(__dirname, './preload.js');
+// Import Ghostery at runtime so require.resolve uses Node (not webpack ids)
+const { ElectronBlocker } = nodeRequire('@ghostery/adblocker-electron') as typeof Ghostery;
 
-const loadFilters = async () => {
-  const path = resolve(getPath('adblock/cache.dat'));
+const DEBUG = !!process.env.DEBUG;
 
-  const downloadFilters = async () => {
-    // Load lists to perform ads and tracking blocking:
-    //
-    //  - https://easylist.to/easylist/easylist.txt
-    //  - https://pgl.yoyo.org/adservers/serverlist.php?hostformat=adblockplus&showintro=1&mimetype=plaintext
-    //  - https://raw.githubusercontent.com/uBlockOrigin/uAssets/master/filters/resource-abuse.txt
-    //  - https://raw.githubusercontent.com/uBlockOrigin/uAssets/master/filters/badware.txt
-    //  - https://raw.githubusercontent.com/uBlockOrigin/uAssets/master/filters/filters.txt
-    //  - https://raw.githubusercontent.com/uBlockOrigin/uAssets/master/filters/unbreak.txt
-    //
-    //  - https://easylist.to/easylist/easyprivacy.txt
-    //  - https://raw.githubusercontent.com/uBlockOrigin/uAssets/master/filters/privacy.txt
-    engine = await ElectronBlocker.fromPrebuiltAdsAndTracking(fetch);
+function dlog(...args: any[]) { if (DEBUG) console.log('[adblock]', ...args); }
+function always(...args: any[]) { console.log('[adblock]', ...args); }
 
-    try {
-      await fs.writeFile(path, engine.serialize());
-    } catch (err) {
-      if (err) return console.error(err);
-    }
-  };
+// Lazily computed after app is ready
+let FILTERS_DIR!: string;
+let ENGINE_PATH!: string;
 
-  if (existsSync(path)) {
-    try {
-      const buffer = await fs.readFile(resolve(path));
-
-      try {
-        engine = ElectronBlocker.deserialize(buffer);
-      } catch (e) {
-        return downloadFilters();
-      }
-    } catch (err) {
-      return console.error(err);
-    }
-  } else {
-    return downloadFilters();
+// Resolve Ghostery’s official preload bundle
+function resolveGhosteryPreloadPath(): string {
+  const candidates = [
+    () => nodeRequire.resolve('@ghostery/adblocker-electron-preload'),
+    () => nodeRequire.resolve('@ghostery/adblocker-electron-preload/dist/preload.cjs'),
+    () => nodeRequire.resolve('@ghostery/adblocker-electron-preload/dist/preload.js'),
+  ];
+  for (const tryResolve of candidates) {
+    try { return tryResolve(); } catch {}
   }
-};
+  return '';
+}
+const PRELOAD_PATH = (() => { try { return resolveGhosteryPreloadPath(); } catch { return ''; } })();
 
-const emitBlockedEvent = (request: Request) => {
-  const win = Application.instance.windows.findByBrowserView(request.tabId);
-  if (!win) return;
-  win.viewManager.views.get(request.tabId).emitEvent('blocked-ad');
-};
-
-let adblockRunning = false;
+// Engine instance
+let blocker: InstanceType<typeof ElectronBlocker> | null = null;
 let adblockInitialized = false;
 
-interface IAdblockInfo {
-  headersReceivedId?: number;
-  beforeRequestId?: number;
+// Per-session bookkeeping (to avoid duplicate enables & duplicate preloads)
+const enabledSessions = new WeakSet<Session>();
+const preloadedSessions = new WeakSet<Session>();
+const preloadIds = new WeakMap<Session, { frame: string; sw: string }>();
+
+let globalWebContentsHooked = false;
+
+/**
+ * Make ipcMain.handle idempotent. Electron throws if a second handler is registered
+ * for the same channel. Ghostery’s BlockingContext registers a few channels on every
+ * enable call. We safely remove existing handlers before re-registering.
+ */
+function makeIpcHandleIdempotent(): void {
+  const anyIpc = ipcMain as any;
+  if (anyIpc.__idempotentPatched) return;
+
+  const originalHandle = ipcMain.handle.bind(ipcMain);
+  (ipcMain as any).handle = (channel: string, listener: (...args: any[]) => any) => {
+    try { ipcMain.removeHandler(channel); } catch {}
+    return originalHandle(channel, listener);
+  };
+
+  anyIpc.__idempotentPatched = true;
+  dlog('ipcMain.handle patched to be idempotent');
 }
 
-const sessionAdblockInfoMap: Map<Electron.Session, IAdblockInfo> = new Map();
+// --- Debug event wiring (optional) ---
+function wireDebugEvents(b: InstanceType<typeof ElectronBlocker>) {
+  try {
+    // @ts-ignore (events exposed in Electron env)
+    b.on('request-blocked', (details: any) => dlog('request-blocked:', details?.url ?? details));
+    // @ts-ignore
+    b.on('request-redirected', (details: any) => dlog('request-redirected:', details?.url ?? details));
+    // @ts-ignore
+    b.on('request-whitelisted', (details: any) => dlog('request-whitelisted:', details?.url ?? details));
+  } catch {}
+}
 
-export const runAdblockService = async (ses: any) => {
-  if (!adblockInitialized) {
-    adblockInitialized = true;
-    await loadFilters();
+async function ensureDirsReady(): Promise<void> {
+  if (!FILTERS_DIR || !ENGINE_PATH) {
+    const userDataAdblockDir = getPath('adblock') || resolve(app.getPath('userData'), 'adblock');
+    FILTERS_DIR = userDataAdblockDir;
+    ENGINE_PATH = join(FILTERS_DIR, 'engine.bin');
   }
+  try { await fs.mkdir(FILTERS_DIR, { recursive: true }); } catch {}
+}
 
-  if (adblockInitialized && !engine) {
+// Build or load engine with Ghostery’s documented caching helpers
+async function createOrLoadBlocker(): Promise<InstanceType<typeof ElectronBlocker>> {
+  await ensureDirsReady();
+  const eng = await (ElectronBlocker as any).fromPrebuiltAdsAndTracking(fetch as any, {
+    path: ENGINE_PATH,
+    read: fs.readFile,
+    write: fs.writeFile,
+  });
+  dlog('engine ready', existsSync(ENGINE_PATH) ? '(cached)' : '(fresh)');
+  return eng as InstanceType<typeof ElectronBlocker>;
+}
+
+// Cosmetic filter events → bubble to your UI (optional parity with your old code)
+function emitBlockedEvent(request: any /* Request-like */) {
+  try {
+    const win = Application.instance?.windows.findByBrowserView?.(request.tabId);
+    if (!win) return;
+    const view = win.viewManager?.views.get?.(request.tabId);
+    view?.emitEvent?.('blocked-ad');
+  } catch {}
+}
+
+// Register preload once per session using modern API; skip if unavailable
+async function registerPreloadForSession(ses: Session): Promise<void> {
+  if (!PRELOAD_PATH) {
+    dlog('no Ghostery preload found — cosmetic counter UI disabled, network blocking unaffected');
     return;
   }
 
-  if (adblockRunning) return;
+  if (preloadedSessions.has(ses)) return;
 
-  adblockRunning = true;
-
-  const info = sessionAdblockInfoMap.get(ses) || {};
-
-  if (!info.headersReceivedId) {
-    info.headersReceivedId = ses.webRequest.addListener(
-      'onHeadersReceived',
-      { urls: ['<all_urls>'] },
-      (engine as any).onHeadersReceived,
-      { order: 0 },
-    ).id;
+  const anySes = ses as any;
+  if (typeof anySes.registerPreloadScript !== 'function') {
+    dlog('registerPreloadScript not available; skipping preload');
+    return;
   }
 
-  if (!info.beforeRequestId) {
-    info.beforeRequestId = ses.webRequest.addListener(
-      'onBeforeRequest',
-      { urls: ['<all_urls>'] },
-      (engine as any).onBeforeRequest,
-      { order: 0 },
-    ).id;
+  const ids = preloadIds.get(ses) ?? { frame: 'adblock-frame', sw: 'adblock-sw' };
+  preloadIds.set(ses, ids);
+
+  // Avoid duplicates
+  const list = typeof anySes.getPreloadScripts === 'function' ? await anySes.getPreloadScripts() : [];
+  const hasFrame = Array.isArray(list) && list.some((p: any) => p.id === ids.frame || p.filePath === PRELOAD_PATH);
+  const hasSW   = Array.isArray(list) && list.some((p: any) => p.id === ids.sw);
+
+  if (!hasFrame) {
+    await anySes.registerPreloadScript({ id: ids.frame, filePath: PRELOAD_PATH, type: 'frame' });
+    dlog('preload registered (frame):', PRELOAD_PATH);
+  }
+  if (!hasSW) {
+    try {
+      await anySes.registerPreloadScript({ id: ids.sw, filePath: PRELOAD_PATH, type: 'service-worker' });
+      dlog('preload registered (service-worker):', PRELOAD_PATH);
+    } catch {
+      dlog('service-worker preload not supported in this Electron; skipping');
+    }
   }
 
-  sessionAdblockInfoMap.set(ses, info);
+  preloadedSessions.add(ses);
+}
 
-  ipcMain.on('get-cosmetic-filters', (engine as any).onGetCosmeticFilters);
-  ipcMain.on(
-    'is-mutation-observer-enabled',
-    (engine as any).onIsMutationObserverEnabled,
-  );
+// Enable Ghostery in the session — once per session
+async function enableForSession(ses: Session): Promise<void> {
+  if (!blocker) return;
 
-  // Electron 35+ deprecated session.getPreloads/setPreloads. New APIs
-  // registerPreloadScript/unregisterPreloadScript/getPreloadScripts should be
-  // used instead. We detect which API is available at runtime and choose the
-  // appropriate method. If neither API is available we silently skip adding
-  // the preload script.
-  try {
-    if (typeof ses.registerPreloadScript === 'function') {
-      // Check if the script is already registered to avoid duplicates. The
-      // returned array contains objects with id and filePath properties.
-      const existing = typeof ses.getPreloadScripts === 'function'
-        ? await ses.getPreloadScripts()
-        : [];
-      const alreadyRegistered = existing.some(
-        (p: any) => p.filePath === PRELOAD_PATH || p.id === 'adblock',
-      );
-      if (!alreadyRegistered) {
-        await ses.registerPreloadScript({
-          id: 'adblock',
-          filePath: PRELOAD_PATH,
-          // Preload into the frame context. This matches the old behaviour of
-          // setPreloads().
-          type: 'frame',
-        });
-      }
-    } else if (typeof ses.setPreloads === 'function') {
-      // Fall back to deprecated API. Ensure the result is iterable before
-      // concatenating. Some Electron versions changed the return type of
-      // getPreloads() from array to undefined or another structure, which
-      // causes TypeError: object is not iterable. We coerce to an array here.
-      const existing: any[] = Array.isArray(ses.getPreloads?.())
-        ? ses.getPreloads()
-        : [];
-      if (!existing.includes(PRELOAD_PATH)) {
-        ses.setPreloads(existing.concat([PRELOAD_PATH]));
+  await registerPreloadForSession(ses);
+
+  if (!enabledSessions.has(ses)) {
+    // With the idempotent ipcMain.handle patch, Ghostery can safely re-register its channels.
+    blocker.enableBlockingInSession(ses);
+    enabledSessions.add(ses);
+    dlog('enabled in session (IPC + webRequest wired)');
+
+    try {
+      // Optional: reflect block events to your UI like your old code
+      (blocker as any).on?.('request-blocked', emitBlockedEvent);
+      (blocker as any).on?.('request-redirected', emitBlockedEvent);
+    } catch {}
+  }
+}
+
+// Attach to new & existing contents
+function hookAllWebContents(): void {
+  if (globalWebContentsHooked) return;
+  globalWebContentsHooked = true;
+
+  app.on('web-contents-created', async (_evt, wc: WebContents) => {
+    try {
+      await enableForSession(wc.session);
+      dlog(`adblock wired for ${wc.getType?.() ?? 'webContents'} (partition=${(wc.session as any).partition})`);
+    } catch (e) {
+      dlog('failed wiring for new web-contents:', e);
+    }
+  });
+
+  for (const wc of webContents.getAllWebContents?.() ?? []) {
+    void enableForSession(wc.session);
+  }
+}
+
+// Public API
+export const runAdblockService = async (ses: Session = session.defaultSession): Promise<void> => {
+  // Patch ipcMain.handle BEFORE anything else touches Ghostery’s BlockingContext
+  makeIpcHandleIdempotent();
+
+  if (!app.isReady()) {
+    await app.whenReady();
+  }
+
+  if (!adblockInitialized) {
+    try {
+      blocker = await createOrLoadBlocker();
+    } catch (e) {
+      console.error('[adblock] Failed to load adblock engine (cached). Retrying without cache:', e);
+      try {
+        blocker = await (ElectronBlocker as any).fromPrebuiltAdsAndTracking(fetch as any) as InstanceType<typeof ElectronBlocker>;
+      } catch (e2) {
+        console.error('[adblock] FATAL: could not initialize ElectronBlocker:', e2);
+        return;
       }
     }
-  } catch (e) {
-    console.warn('Failed to register adblock preload script:', e);
+    adblockInitialized = true;
+    wireDebugEvents(blocker!);
   }
 
-  engine.on('request-blocked', emitBlockedEvent);
-  engine.on('request-redirected', emitBlockedEvent);
+  if (!blocker) {
+    console.error('[adblock] Not started — blocker is null');
+    return;
+  }
+
+  await enableForSession(ses);
+  hookAllWebContents();
+
+  // One clear log (no repeats)
+  if (!(runAdblockService as any)._printed) {
+    always('service running (ghostery preload:', PRELOAD_PATH ? 'ok' : 'missing', ')');
+    (runAdblockService as any)._printed = true;
+  }
 };
 
-export const stopAdblockService = (ses: any) => {
-  if (!ses.webRequest.removeListener) return;
-  if (!adblockRunning) return;
-
-  adblockRunning = false;
-
-  const info = sessionAdblockInfoMap.get(ses) || {};
-
-  if (info.beforeRequestId) {
-    ses.webRequest.removeListener('onBeforeRequest', info.beforeRequestId);
-    info.beforeRequestId = null;
+export const stopAdblockService = async (ses: Session = session.defaultSession): Promise<void> => {
+  // Disable Ghostery in this session (removes webRequest + IPC)
+  if (enabledSessions.has(ses)) {
+    try { blocker?.disableBlockingInSession(ses); } catch {}
+    enabledSessions.delete(ses);
   }
 
-  if (info.headersReceivedId) {
-    ses.webRequest.removeListener('onHeadersReceived', info.headersReceivedId);
-    info.headersReceivedId = null;
-  }
-
-  try {
-    if (typeof ses.unregisterPreloadScript === 'function') {
-      ses.unregisterPreloadScript('adblock');
-    } else if (typeof ses.setPreloads === 'function') {
-      const existing: any[] = Array.isArray(ses.getPreloads?.())
-        ? ses.getPreloads()
-        : [];
-      if (existing.includes(PRELOAD_PATH)) {
-        ses.setPreloads(existing.filter((p: string) => p !== PRELOAD_PATH));
-      }
+  // Unregister our preloads
+  if (preloadedSessions.has(ses)) {
+    const anySes = ses as any;
+    const ids = preloadIds.get(ses);
+    if (ids && typeof anySes.unregisterPreloadScript === 'function') {
+      try { anySes.unregisterPreloadScript(ids.frame); } catch {}
+      try { anySes.unregisterPreloadScript(ids.sw); } catch {}
+      dlog('preload unregistered:', ids);
     }
-  } catch (e) {
-    console.warn('Failed to unregister adblock preload script:', e);
+    preloadedSessions.delete(ses);
+    preloadIds.delete(ses);
   }
 };
+
+// Optional: auto-start once on main-process import
+if (process.type === 'browser') {
+  app.once('ready', () => void runAdblockService());
+}

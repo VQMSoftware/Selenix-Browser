@@ -197,11 +197,11 @@ export class AppWindow {
       this.send('html-fullscreen', false);
     });
 
-    this.win.on('scroll-touch-begin', () => {
+    (this.win as any).on('scroll-touch-begin', () => {
       this.send('scroll-touch-begin');
     });
 
-    this.win.on('scroll-touch-end', () => {
+    (this.win as any).on('scroll-touch-end', () => {
       this.viewManager.selected.send('scroll-touch-end');
       this.send('scroll-touch-end');
     });

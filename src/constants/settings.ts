@@ -70,7 +70,7 @@ export const DEFAULT_SETTINGS: ISettings = {
   suggestions: true,
   themeAuto: true,
   searchEngines: DEFAULT_SEARCH_ENGINES,
-  searchEngine: 0,
+  searchEngine: 1,
   startupBehavior: {
     type: 'empty',
   },

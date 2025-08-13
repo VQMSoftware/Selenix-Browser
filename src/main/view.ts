@@ -76,8 +76,7 @@ export class View {
         sandbox: false,
         partition: incognito ? 'view_incognito' : 'persist:view',
         plugins: true,
-        nativeWindowOpen: true,
-        webSecurity: true,
+                webSecurity: true,
         javascript: true,
       },
     });
@@ -195,9 +194,9 @@ export class View {
       },
     );
 
-    this.webContents.addListener(
+    (this.webContents as any).addListener(
       'new-window',
-      (e, url, frameName, disposition) => {
+      (e: any, url: string, frameName: string, disposition: string) => {
         if (disposition === 'new-window') {
           if (frameName === '_self') {
             e.preventDefault();

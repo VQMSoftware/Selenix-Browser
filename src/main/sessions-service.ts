@@ -62,53 +62,52 @@ export class SessionsService {
     }
 
     this.view.setPermissionRequestHandler(
-      async (webContents: WebContents, permission: string, callback: (permissionGranted: boolean) => void, details: Electron.PermissionRequestHandlerHandlerDetails) => {
+      async (
+        webContents: WebContents,
+        permission: string,
+        callback: (permissionGranted: boolean) => void,
+        details: any,
+      ) => {
         const window = Application.instance.windows.findByBrowserView(
           webContents.id,
         );
-
-        if (webContents.id !== window.viewManager.selectedId) return;
+        if (!window || webContents.id !== window.viewManager.selectedId) return;
 
         if (permission === 'fullscreen') {
           callback(true);
-        } else {
-          try {
-            const { hostname } = url.parse(details.requestingUrl);
-            const perm: any = await Application.instance.storage.findOne({
+          return;
+        }
+
+        try {
+          const { hostname } = url.parse(details.requestingUrl);
+          const perm: any = await Application.instance.storage.findOne({
+            scope: 'permissions',
+            query: { url: hostname, permission },
+          });
+
+          if (!perm) {
+            const response = await requestPermission(
+              window.win,
+              permission,
+              hostname,
+              details,
+              window.viewManager.selectedId,
+            );
+            callback(response);
+            await Application.instance.storage.insert({
               scope: 'permissions',
-              query: {
+              item: {
                 url: hostname,
                 permission,
+                type: response ? 1 : 2,
                 mediaTypes: JSON.stringify(details.mediaTypes) || '',
               },
             });
-
-            if (!perm) {
-              const response = await requestPermission(
-                window.win,
-                permission,
-                webContents.getURL(),
-                details,
-                webContents.id,
-              );
-
-              callback(response);
-
-              await Application.instance.storage.insert({
-                scope: 'permissions',
-                item: {
-                  url: hostname,
-                  permission,
-                  type: response ? 1 : 2,
-                  mediaTypes: JSON.stringify(details.mediaTypes) || '',
-                },
-              });
-            } else {
-              callback(perm.type === 1);
-            }
-          } catch (e) {
-            callback(false);
+          } else {
+            callback(perm.type === 1);
           }
+        } catch (e) {
+          callback(false);
         }
       },
     );
@@ -249,7 +248,6 @@ export class SessionsService {
 
     ses.clearStorageData({
       storages: [
-        'appcache',
         'cookies',
         'filesystem',
         'indexdb',
