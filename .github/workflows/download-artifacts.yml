@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   publish:
-    name: Download artifacts
+    name: Download artifacts and publish release assets
     runs-on: ubuntu-latest
     if: >
       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
@@ -61,15 +61,19 @@ jobs:
           fi
           gh --version
 
-      - name: Use workflow_run context
+      - name: Determine tag, run and sha from context
         id: ctx
-        if: github.event_name == 'workflow_run'
         shell: bash
         run: |
-          echo "RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
-          echo "TAG=${{ github.event.workflow_run.head_branch }}" >> "$GITHUB_ENV"
-          echo "SHA=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_ENV"
-          echo "Using run_id=$RUN_ID tag=$TAG sha=$SHA from workflow_run context"
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            echo "RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+            echo "TAG=${{ github.event.workflow_run.head_branch }}" >> "$GITHUB_ENV"
+            echo "SHA=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_ENV"
+          else
+            echo "TAG=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
+            echo "SHA=${GITHUB_SHA}" >> "$GITHUB_ENV"
+          fi
+          echo "Context: TAG=$TAG SHA=$SHA RUN_ID=${RUN_ID:-unset}"
 
       - name: Pre-check release completeness (may skip rest)
         id: precheck
@@ -79,11 +83,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ "${{ github.event_name }}" = "workflow_run" ]; then
-            TAG="${{ github.event.workflow_run.head_branch }}"
-          else
-            TAG="${GITHUB_REF_NAME}"
-          fi
+          TAG="${TAG:-${GITHUB_REF_NAME}}"
           echo "TAG=$TAG" >> "$GITHUB_ENV"
 
           PN="${PRODUCT_NAME}"
@@ -98,7 +98,6 @@ jobs:
 
           WIN_ZIP="$(pick_name "${PN}-${VERSION}-x64-win.zip" "${PN}-${VERSION}-win.zip")"
           APPIMG="$(pick_name "${PN}-${VERSION}-x86_64.AppImage" "${PN}-${VERSION}.AppImage")"
-          # handle both dmg naming schemes
           DMG_NAME="$(pick_name "${PN}-${VERSION}-arm64-mac.dmg" "${PN}-${VERSION}-arm64.dmg")"
           DMG_BLOCKMAP_NAME="$(pick_name "${PN}-${VERSION}-arm64-mac.dmg.blockmap" "${PN}-${VERSION}-arm64.dmg.blockmap")"
           if echo "$ASSET_NAMES" | grep -qx "${PN}_${VERSION}_amd64.deb"; then
@@ -113,7 +112,7 @@ jobs:
           EXTRAS_FILE="$TMP_DIR/extras.txt"
           MISSING_FILE="$TMP_DIR/missing.txt"
 
-          # Expected 13 filenames, ordered to match Wexond (NO mac .zip.blockmap)
+          # Expected 13 filenames (order matches Wexond; NO mac .zip.blockmap)
           printf "%s\n" \
             "latest-linux.yml" \
             "latest-mac.yml" \
@@ -133,9 +132,7 @@ jobs:
           echo "$ASSET_NAMES" | sort -u > "$CURRENT_FILE"
           sort -u "$EXPECTED_FILE" -o "$EXPECTED_FILE"
 
-          # extras: in current but not expected
           comm -13 "$EXPECTED_FILE" "$CURRENT_FILE" > "$EXTRAS_FILE" || true
-          # missing: in expected but not current
           comm -23 "$EXPECTED_FILE" "$CURRENT_FILE" > "$MISSING_FILE" || true
 
           EXTRAS_N=$(wc -l < "$EXTRAS_FILE" | tr -d ' ')
@@ -169,7 +166,7 @@ jobs:
             echo "No extras to prune."
           fi
 
-      - name: Find matching Build run for this tag (≤60s)
+      - name: Find matching Build run for this tag (≤2 min wait)
         if: env.RELEASE_COMPLETE != 'yes' && github.event_name != 'workflow_run'
         shell: bash
         env:
@@ -181,8 +178,8 @@ jobs:
           echo "Tag: $TAG"
           echo "SHA: $SHA"
 
-          ATTEMPTS=5
-          SLEEP_SECS=12
+          ATTEMPTS=12          # ~2 minutes total
+          SLEEP_SECS=10
           RUN_ID=""
 
           for i in $(seq 1 $ATTEMPTS); do
@@ -202,27 +199,54 @@ jobs:
                 });
               '
             )" || true
-            [ -n "$RUN_ID" ] && break
+            if [ -n "$RUN_ID" ]; then
+              echo "Found successful Build run: $RUN_ID"
+              break
+            fi
+            echo "Waiting for Build run to complete... attempt $i/${ATTEMPTS}"
             sleep "$SLEEP_SECS"
           done
 
           if [ -z "$RUN_ID" ]; then
-            echo "WARN: No Build run found within 60s; assuming artifacts already uploaded."
-            echo "RELEASE_COMPLETE=yes" >> "$GITHUB_ENV"
-          else
-            echo "RUN_ID=$RUN_ID" >> "$GITHUB_ENV"
-            echo "TAG=$TAG" >> "$GITHUB_ENV"
+            echo "WARN: No successful Build run found within ~2 minutes."
+            exit 1
           fi
 
-      - name: Download all artifacts from Build run
-        if: env.RELEASE_COMPLETE != 'yes'
+          echo "RUN_ID=$RUN_ID" >> "$GITHUB_ENV"
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+
+      - name: Wait for artifacts to be published (≤2 min; workflow_run path)
+        if: env.RELEASE_COMPLETE != 'yes' && github.event_name == 'workflow_run'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          gh run download "$RUN_ID" --dir "$PROJECT_DIR/dist"
-          echo "Downloaded files:"
+          RUN_ID="${RUN_ID:-${{ github.event.workflow_run.id }}}"
+          ATTEMPTS=12
+          SLEEP_SECS=10
+          for i in $(seq 1 $ATTEMPTS); do
+            COUNT=$(gh api repos/${{ github.repository }}/actions/runs/$RUN_ID/artifacts --jq '.total_count // 0' || echo 0)
+            echo "Artifacts available for run $RUN_ID: $COUNT (attempt $i/$ATTEMPTS)"
+            if [ "$COUNT" -ge 3 ]; then
+              break
+            fi
+            sleep "$SLEEP_SECS"
+          done
+
+      - name: Download all artifacts from Build run (reliable)
+        if: env.RELEASE_COMPLETE != 'yes'
+        uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ env.RUN_ID }}
+          path: ${{ env.PROJECT_DIR }}/dist
+          merge-multiple: true
+
+      - name: List downloaded files
+        if: env.RELEASE_COMPLETE != 'yes'
+        shell: bash
+        run: |
+          echo "Downloaded files under $PROJECT_DIR/dist:"
           find "$PROJECT_DIR/dist" -type f -maxdepth 3 -print
 
       - name: Ensure release exists
@@ -236,7 +260,7 @@ jobs:
             exit 1
           fi
 
-      - name: Upload exactly Wexond-style 13 files in the same order
+      - name: Upload exactly Wexond-style 13 files (fast retries)
         if: env.RELEASE_COMPLETE != 'yes'
         shell: bash
         working-directory: ${{ env.PROJECT_DIR }}
@@ -299,8 +323,52 @@ jobs:
           echo "Uploading (missing only) in deterministic order:"
           printf '  - %s\n' "${FILES[@]}"
 
+          upload_with_retry() {
+            local file="$1"
+            local base="$(basename "$file")"
+            local attempts=3      # keep total under ~2 min
+            local delay=4
+            for i in $(seq 1 "$attempts"); do
+              echo "[$i/$attempts] Uploading $base ..."
+              if gh release upload "$TAG" "$file" --clobber >/dev/null 2>&1; then
+                if gh release view "$TAG" --json assets --jq ".assets[].name" | grep -qx "$base"; then
+                  echo "Uploaded and verified: $base"
+                  return 0
+                fi
+                echo "Upload OK but $base not visible yet; short wait..."
+              else
+                echo "Upload failed for $base; retrying shortly..."
+              fi
+              sleep "$delay"
+              delay=$((delay * 2))  # 4s -> 8s -> 16s (max ~28s/file)
+            done
+            echo "::error::Failed to upload $base after multiple attempts."
+            return 1
+          }
+
           for f in "${FILES[@]}"; do
-            gh release upload "$TAG" "$f" --clobber || echo "NOTE: $f already present or failed; continuing."
+            upload_with_retry "$f"
           done
 
-          echo "Release upload complete for ${TAG}."
+      - name: Final verification (must be exactly 13 expected assets)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${TAG:?}"
+          EXPECTED_FILE="${EXPECTED_FILE:?}"
+          ASSET_NAMES="$(gh release view "$TAG" --json assets --jq '.assets[].name' | sort -u)"
+          echo "Release assets after upload:"
+          echo "$ASSET_NAMES"
+          TMP="$(mktemp)"
+          echo "$ASSET_NAMES" > "$TMP"
+          sort -u "$EXPECTED_FILE" -o "$EXPECTED_FILE"
+          comm -23 "$EXPECTED_FILE" "$TMP" > missing_final.txt || true
+          MISSING_FINAL_N=$(wc -l < missing_final.txt | tr -d ' ')
+          if [ "$MISSING_FINAL_N" -gt 0 ]; then
+            echo "::error::Still missing $MISSING_FINAL_N required file(s):"
+            cat missing_final.txt
+            exit 1
+          fi
+          echo "✅ Release has all 13 required assets for $TAG."
