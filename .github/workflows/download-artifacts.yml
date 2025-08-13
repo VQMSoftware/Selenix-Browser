@@ -61,116 +61,17 @@ jobs:
           fi
           gh --version
 
-      - name: Use workflow_run context
-        id: ctx
+      - name: Context from workflow_run
         if: github.event_name == 'workflow_run'
         shell: bash
         run: |
           echo "RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
           echo "TAG=${{ github.event.workflow_run.head_branch }}" >> "$GITHUB_ENV"
           echo "SHA=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_ENV"
-          echo "Using run_id=$RUN_ID tag=$TAG sha=$SHA from workflow_run context"
-
-      - name: Pre-check release completeness (may skip rest)
-        id: precheck
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-
-          if [ "${{ github.event_name }}" = "workflow_run" ]; then
-            TAG="${{ github.event.workflow_run.head_branch }}"
-          else
-            TAG="${GITHUB_REF_NAME}"
-          fi
-          echo "TAG=$TAG" >> "$GITHUB_ENV"
-
-          PN="${PRODUCT_NAME}"
-          VERSION="${TAG#v}"
-
-          list_assets() { gh release view "$TAG" --json assets --jq '.assets[].name' || true; }
-          ASSET_NAMES="$(list_assets || true)"
-
-          pick_name() {
-            if echo "$ASSET_NAMES" | grep -qx "$1"; then echo "$1"; else echo "$2"; fi
-          }
-
-          WIN_ZIP="$(pick_name "${PN}-${VERSION}-x64-win.zip" "${PN}-${VERSION}-win.zip")"
-          APPIMG="$(pick_name "${PN}-${VERSION}-x86_64.AppImage" "${PN}-${VERSION}.AppImage")"
-          # handle both dmg naming schemes
-          DMG_NAME="$(pick_name "${PN}-${VERSION}-arm64-mac.dmg" "${PN}-${VERSION}-arm64.dmg")"
-          DMG_BLOCKMAP_NAME="$(pick_name "${PN}-${VERSION}-arm64-mac.dmg.blockmap" "${PN}-${VERSION}-arm64.dmg.blockmap")"
-          if echo "$ASSET_NAMES" | grep -qx "${PN}_${VERSION}_amd64.deb"; then
-            DEB="${PN}_${VERSION}_amd64.deb"
-          else
-            DEB="${PN}-${VERSION}-amd64.deb"
-          fi
-
-          TMP_DIR="$(mktemp -d)"
-          EXPECTED_FILE="$TMP_DIR/expected.txt"
-          CURRENT_FILE="$TMP_DIR/current.txt"
-          EXTRAS_FILE="$TMP_DIR/extras.txt"
-          MISSING_FILE="$TMP_DIR/missing.txt"
-
-          # Expected 13 filenames, ordered to match Wexond (NO mac .zip.blockmap)
-          printf "%s\n" \
-            "latest-linux.yml" \
-            "latest-mac.yml" \
-            "latest.yml" \
-            "${PN}-${VERSION}-ia32-win.zip" \
-            "${PN}-${VERSION}-ia32.nsis.7z" \
-            "${PN}-${VERSION}-arm64-mac.zip" \
-            "${WIN_ZIP}" \
-            "${PN}-${VERSION}-x64.nsis.7z" \
-            "${APPIMG}" \
-            "${DMG_NAME}" \
-            "${DMG_BLOCKMAP_NAME}" \
-            "${PN}-Web-Setup-${VERSION}.exe" \
-            "${DEB}" \
-            > "$EXPECTED_FILE"
-
-          echo "$ASSET_NAMES" | sort -u > "$CURRENT_FILE"
-          sort -u "$EXPECTED_FILE" -o "$EXPECTED_FILE"
-
-          # extras: in current but not expected
-          comm -13 "$EXPECTED_FILE" "$CURRENT_FILE" > "$EXTRAS_FILE" || true
-          # missing: in expected but not current
-          comm -23 "$EXPECTED_FILE" "$CURRENT_FILE" > "$MISSING_FILE" || true
-
-          EXTRAS_N=$(wc -l < "$EXTRAS_FILE" | tr -d ' ')
-          MISSING_N=$(wc -l < "$MISSING_FILE" | tr -d ' ')
-          echo "Extras: $EXTRAS_N, Missing: $MISSING_N"
-
-          echo "EXPECTED_FILE=$EXPECTED_FILE" >> "$GITHUB_ENV"
-          echo "MISSING_FILE=$MISSING_FILE" >> "$GITHUB_ENV"
-          echo "EXTRAS_FILE=$EXTRAS_FILE" >> "$GITHUB_ENV"
-
-          if [ "$EXTRAS_N" -eq 0 ] && [ "$MISSING_N" -eq 0 ]; then
-            echo "RELEASE_COMPLETE=yes" >> "$GITHUB_ENV"
-            echo "Release already complete with exactly 13 assets."
-          fi
-
-      - name: Delete unexpected extra assets from release
-        if: env.RELEASE_COMPLETE != 'yes'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [ -s "$EXTRAS_FILE" ]; then
-            echo "Pruning unexpected assets:"
-            cat "$EXTRAS_FILE"
-            while IFS= read -r name; do
-              [ -z "$name" ] && continue
-              gh release delete-asset "$TAG" "$name" -y || true
-            done < "$EXTRAS_FILE"
-          else
-            echo "No extras to prune."
-          fi
+          echo "Using run_id=$RUN_ID tag=$TAG sha=$SHA from workflow_run"
 
       - name: Find matching Build run for this tag (≤60s)
-        if: env.RELEASE_COMPLETE != 'yes' && github.event_name != 'workflow_run'
+        if: github.event_name != 'workflow_run'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -207,20 +108,20 @@ jobs:
           done
 
           if [ -z "$RUN_ID" ]; then
-            echo "WARN: No Build run found within 60s; assuming artifacts already uploaded."
-            echo "RELEASE_COMPLETE=yes" >> "$GITHUB_ENV"
-          else
-            echo "RUN_ID=$RUN_ID" >> "$GITHUB_ENV"
-            echo "TAG=$TAG" >> "$GITHUB_ENV"
+            echo "::error::No successful 'Build' run found for tag/sha."
+            exit 1
           fi
 
+          echo "RUN_ID=$RUN_ID" >> "$GITHUB_ENV"
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+
       - name: Download all artifacts from Build run
-        if: env.RELEASE_COMPLETE != 'yes'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          : "${RUN_ID:?RUN_ID not set}"
           gh run download "$RUN_ID" --dir "$PROJECT_DIR/dist"
           echo "Downloaded files:"
           find "$PROJECT_DIR/dist" -type f -maxdepth 3 -print
@@ -230,14 +131,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          : "${TAG:=${GITHUB_REF_NAME}}"
           : "${TAG:?TAG not set}"
           if ! gh release view "$TAG" >/dev/null 2>&1; then
             echo "::error::No GitHub Release found for tag '$TAG'. Create it first, then re-run."
             exit 1
           fi
 
-      - name: Upload exactly Wexond-style 13 files in the same order
-        if: env.RELEASE_COMPLETE != 'yes'
+      - name: Upload artifacts (deterministic order; skip missing; clobber latest*.yml)
         shell: bash
         working-directory: ${{ env.PROJECT_DIR }}
         env:
@@ -248,59 +149,83 @@ jobs:
           VERSION="${TAG#v}"
           PN="${PRODUCT_NAME}"
 
-          choose_local() {
-            for cand in "$@"; do
-              f=$(find dist -type f -name "$cand" -print -quit)
-              [ -n "$f" ] && { echo "$cand"; return 0; }
+          # Helper: first existing file that matches any of the given patterns
+          first_match() {
+            for pat in "$@"; do
+              f=$(find dist -type f -name "$pat" -print -quit)
+              if [ -n "$f" ]; then
+                echo "$f"
+                return 0
+              fi
             done
-            echo "$1"
+            return 1
           }
-          WIN_ZIP="$(choose_local "${PN}-${VERSION}-x64-win.zip" "${PN}-${VERSION}-win.zip")"
-          APPIMG="$(choose_local "${PN}-${VERSION}-x86_64.AppImage" "${PN}-${VERSION}.AppImage")"
-          DMG_NAME="$(choose_local "${PN}-${VERSION}-arm64-mac.dmg" "${PN}-${VERSION}-arm64.dmg")"
-          DMG_BLOCKMAP_NAME="$(choose_local "${PN}-${VERSION}-arm64-mac.dmg.blockmap" "${PN}-${VERSION}-arm64.dmg.blockmap")"
-          if find dist -type f -name "${PN}_${VERSION}_amd64.deb" -print -quit >/dev/null; then
-            DEB="${PN}_${VERSION}_amd64.deb"
-          else
-            DEB="${PN}-${VERSION}-amd64.deb"
-          fi
 
-          ORDERED=(
-            "latest-linux.yml"
-            "latest-mac.yml"
-            "latest.yml"
-            "${PN}-${VERSION}-ia32-win.zip"
-            "${PN}-${VERSION}-ia32.nsis.7z"
-            "${PN}-${VERSION}-arm64-mac.zip"
-            "${WIN_ZIP}"
-            "${PN}-${VERSION}-x64.nsis.7z"
-            "${APPIMG}"
-            "${DMG_NAME}"
-            "${DMG_BLOCKMAP_NAME}"
-            "${PN}-Web-Setup-${VERSION}.exe"
-            "${DEB}"
+          # Compute canonical candidates but pick from what actually exists LOCALLY.
+          files_to_upload=()
+
+          # YMLs (always clobber later)
+          yml_linux=$(first_match "latest-linux.yml" || true)
+          yml_mac=$(first_match "latest-mac.yml" || true)
+          yml_win=$(first_match "latest.yml" || true)
+
+          # Windows (ia32 + x64)
+          win_ia32_zip=$(first_match "${PN}-${VERSION}-ia32-win.zip" || true)
+          win_ia32_7z=$(first_match "${PN}-${VERSION}-ia32.nsis.7z" || true)
+          win_x64_zip=$(first_match "${PN}-${VERSION}-x64-win.zip" "${PN}-${VERSION}-win.zip" || true)
+          win_x64_7z=$(first_match "${PN}-${VERSION}-x64.nsis.7z" || true)
+          web_setup=$(first_match "${PN}-Web-Setup-${VERSION}.exe" || true)
+
+          # Linux
+          appimage=$(first_match "${PN}-${VERSION}-x86_64.AppImage" "${PN}-${VERSION}.AppImage" || true)
+          deb=$(first_match "${PN}_${VERSION}_amd64.deb" "${PN}-${VERSION}-amd64.deb" || true)
+
+          # macOS
+          mac_zip_arm64=$(first_match "${PN}-${VERSION}-arm64-mac.zip" || true)
+          dmg=$(first_match "${PN}-${VERSION}-arm64-mac.dmg" "${PN}-${VERSION}-arm64.dmg" || true)
+          dmg_blockmap=$(first_match "${PN}-${VERSION}-arm64-mac.dmg.blockmap" "${PN}-${VERSION}-arm64.dmg.blockmap" || true)
+
+          # Deterministic order (Wexond-style)
+          order=(
+            "$yml_linux"
+            "$yml_mac"
+            "$yml_win"
+            "$win_ia32_zip"
+            "$win_ia32_7z"
+            "$mac_zip_arm64"
+            "$win_x64_zip"
+            "$win_x64_7z"
+            "$appimage"
+            "$dmg"
+            "$dmg_blockmap"
+            "$web_setup"
+            "$deb"
           )
 
-          MISSING_NAMES=$(cat "$MISSING_FILE" || true)
+          # If you want to strictly enforce "exactly 13", uncomment this guard:
+          # missing_count=0
+          # for idx in "${!order[@]}"; do [ -z "${order[$idx]}" ] && missing_count=$((missing_count+1)); done
+          # if [ $missing_count -gt 0 ]; then
+          #   echo "::warning::Build did not produce $missing_count of the 13 canonical artifacts; uploading what exists."
+          # fi
 
-          FILES=()
-          for name in "${ORDERED[@]}"; do
-            [ -z "$name" ] && continue
-            echo "$MISSING_NAMES" | grep -qx "$name" || continue
-            f=$(find dist -type f -name "$name" -print -quit)
-            [ -n "$f" ] && FILES+=( "$f" )
+          # Upload logic:
+          # - latest*.yml use --clobber to ensure they always update
+          # - others: upload if not already present, fall back to --clobber if needed
+          echo "Uploading in deterministic order (skipping missing):"
+          for f in "${order[@]}"; do
+            [ -z "$f" ] && continue
+            base=$(basename "$f")
+            echo "  - $base"
+            if [[ "$base" == latest*.yml ]]; then
+              gh release upload "$TAG" "$f" --clobber || true
+            else
+              # Try upload without clobber first
+              if ! gh release upload "$TAG" "$f"; then
+                # If it exists, clobber to refresh content
+                gh release upload "$TAG" "$f" --clobber || true
+              fi
+            fi
           done
 
-          if [ ${#FILES[@]} -eq 0 ]; then
-            echo "Nothing to upload; release now matches the 13-file set."
-            exit 0
-          fi
-
-          echo "Uploading (missing only) in deterministic order:"
-          printf '  - %s\n' "${FILES[@]}"
-
-          for f in "${FILES[@]}"; do
-            gh release upload "$TAG" "$f" --clobber || echo "NOTE: $f already present or failed; continuing."
-          done
-
-          echo "Release upload complete for ${TAG}."
+          echo "Done."
