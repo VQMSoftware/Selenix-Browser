@@ -75,18 +75,108 @@ jobs:
           fi
           echo "Context: TAG=$TAG SHA=$SHA RUN_ID=${RUN_ID:-unset}"
 
-      - name: Pre-check release completeness (may skip rest)
-        id: precheck
+      # >>> dynamic wait until ALL 3 matrix artifacts exist <<<
+      - name: Wait for all Build artifacts (Linux, macOS, Windows)
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
 
-          TAG="${TAG:-${GITHUB_REF_NAME}}"
-          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          # Resolve RUN_ID if not present (tag path)
+          if [ -z "${RUN_ID:-}" ]; then
+            # find the latest successful Build run for this tag/sha
+            RUN_ID="$(
+              gh run list \
+                --workflow "Build" \
+                --json databaseId,headSha,headBranch,conclusion,createdAt \
+                --limit 100 | \
+              node -e '
+                let s=""; process.stdin.on("data",d=>s+=d);
+                process.stdin.on("end",()=>{
+                  const arr=JSON.parse(s);
+                  const sha=process.env.SHA;
+                  const tag=process.env.TAG;
+                  const run=arr.find(r=>r.conclusion==="success" && (r.headSha===sha || r.headBranch===tag));
+                  if(run){ process.stdout.write(String(run.databaseId)); }
+                });
+              ' || true
+            )"
+            if [ -z "$RUN_ID" ]; then
+              echo "::error::No successful Build run found for TAG=$TAG SHA=$SHA yet."
+              exit 1
+            fi
+            echo "RUN_ID=$RUN_ID" >> "$GITHUB_ENV"
+          fi
 
+          echo "Waiting for artifacts on run $RUN_ID ..."
           PN="${PRODUCT_NAME}"
+
+          # expected artifact names from the 3 matrix machines (exact, from build.yml)
+          WANT_1="${PN}-Linux-artifacts"
+          WANT_2="${PN}-macOS-artifacts"
+          WANT_3="${PN}-Windows-artifacts"
+
+          # poll until all three are present (no hard timeout; prints heartbeat)
+          i=0
+          while :; do
+            ART="$(gh api repos/${{ github.repository }}/actions/runs/$RUN_ID/artifacts --jq '.artifacts[] | {name:.name, expired:.expired, size:.size_in_bytes}')" || ART=""
+            NAMES="$(echo "$ART" | jq -r 'select(.expired==false) | .name' || true)"
+
+            echo "Visible artifacts:"
+            echo "${NAMES:-<none>}"
+
+            HAVE_L=$(echo "$NAMES" | grep -Fx "$WANT_1" || true)
+            HAVE_M=$(echo "$NAMES" | grep -Fx "$WANT_2" || true)
+            HAVE_W$(echo "$NAMES" | grep -Fx "$WANT_3" || true) || true
+
+            if [ -n "$HAVE_L" ] && [ -n "$HAVE_M" ] && [ -n "$HAVE_W" ]; then
+              echo "All three artifacts are available."
+              break
+            fi
+
+            i=$((i+1))
+            if [ $((i % 12)) -eq 0 ]; then
+              echo "Still waiting... ($(date -u +%H:%M:%S) UTC)"
+            fi
+            sleep 10
+          done
+
+      - name: Download all artifacts from Build run
+        uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ env.RUN_ID }}
+          path: ${{ env.PROJECT_DIR }}/dist
+          merge-multiple: true
+
+      - name: List downloaded files
+        shell: bash
+        run: |
+          echo "Downloaded files under $PROJECT_DIR/dist:"
+          find "$PROJECT_DIR/dist" -type f -maxdepth 3 -print
+
+      # ---- release checks / uploads ----
+
+      - name: Ensure release exists
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          : "${TAG:?TAG not set}"
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::error::No GitHub Release found for tag '$TAG'. Create it first, then re-run."
+            exit 1
+          fi
+
+      - name: Build expected file list and detect existing release assets
+        id: precheck
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          PN="${PRODUCT_NAME}"
+          TAG="${TAG:?}"
           VERSION="${TAG#v}"
 
           list_assets() { gh release view "$TAG" --json assets --jq '.assets[].name' || true; }
@@ -112,7 +202,6 @@ jobs:
           EXTRAS_FILE="$TMP_DIR/extras.txt"
           MISSING_FILE="$TMP_DIR/missing.txt"
 
-          # Expected 13 filenames (order matches Wexond; NO mac .zip.blockmap)
           printf "%s\n" \
             "latest-linux.yml" \
             "latest-mac.yml" \
@@ -135,14 +224,13 @@ jobs:
           comm -13 "$EXPECTED_FILE" "$CURRENT_FILE" > "$EXTRAS_FILE" || true
           comm -23 "$EXPECTED_FILE" "$CURRENT_FILE" > "$MISSING_FILE" || true
 
-          EXTRAS_N=$(wc -l < "$EXTRAS_FILE" | tr -d ' ')
-          MISSING_N=$(wc -l < "$MISSING_FILE" | tr -d ' ')
-          echo "Extras: $EXTRAS_N, Missing: $MISSING_N"
-
           echo "EXPECTED_FILE=$EXPECTED_FILE" >> "$GITHUB_ENV"
           echo "MISSING_FILE=$MISSING_FILE" >> "$GITHUB_ENV"
           echo "EXTRAS_FILE=$EXTRAS_FILE" >> "$GITHUB_ENV"
 
+          EXTRAS_N=$(wc -l < "$EXTRAS_FILE" | tr -d ' ')
+          MISSING_N=$(wc -l < "$MISSING_FILE" | tr -d ' ')
+          echo "Extras: $EXTRAS_N, Missing: $MISSING_N"
           if [ "$EXTRAS_N" -eq 0 ] && [ "$MISSING_N" -eq 0 ]; then
             echo "RELEASE_COMPLETE=yes" >> "$GITHUB_ENV"
             echo "Release already complete with exactly 13 assets."
@@ -166,101 +254,7 @@ jobs:
             echo "No extras to prune."
           fi
 
-      - name: Find matching Build run for this tag (≤2 min wait)
-        if: env.RELEASE_COMPLETE != 'yes' && github.event_name != 'workflow_run'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          TAG="${GITHUB_REF_NAME}"
-          SHA="${GITHUB_SHA}"
-          echo "Tag: $TAG"
-          echo "SHA: $SHA"
-
-          ATTEMPTS=12          # ~2 minutes total
-          SLEEP_SECS=10
-          RUN_ID=""
-
-          for i in $(seq 1 $ATTEMPTS); do
-            RUN_ID="$(
-              gh run list \
-                --workflow "Build" \
-                --json databaseId,headSha,headBranch,conclusion,createdAt \
-                --limit 100 | \
-              node -e '
-                let s=""; process.stdin.on("data",d=>s+=d);
-                process.stdin.on("end",()=>{
-                  const arr=JSON.parse(s);
-                  const sha=process.env.SHA;
-                  const tag=process.env.TAG;
-                  const run=arr.find(r=>r.conclusion==="success" && (r.headSha===sha || r.headBranch===tag));
-                  if(run){ process.stdout.write(String(run.databaseId)); }
-                });
-              '
-            )" || true
-            if [ -n "$RUN_ID" ]; then
-              echo "Found successful Build run: $RUN_ID"
-              break
-            fi
-            echo "Waiting for Build run to complete... attempt $i/${ATTEMPTS}"
-            sleep "$SLEEP_SECS"
-          done
-
-          if [ -z "$RUN_ID" ]; then
-            echo "WARN: No successful Build run found within ~2 minutes."
-            exit 1
-          fi
-
-          echo "RUN_ID=$RUN_ID" >> "$GITHUB_ENV"
-          echo "TAG=$TAG" >> "$GITHUB_ENV"
-
-      - name: Wait for artifacts to be published (≤2 min; workflow_run path)
-        if: env.RELEASE_COMPLETE != 'yes' && github.event_name == 'workflow_run'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          RUN_ID="${RUN_ID:-${{ github.event.workflow_run.id }}}"
-          ATTEMPTS=12
-          SLEEP_SECS=10
-          for i in $(seq 1 $ATTEMPTS); do
-            COUNT=$(gh api repos/${{ github.repository }}/actions/runs/$RUN_ID/artifacts --jq '.total_count // 0' || echo 0)
-            echo "Artifacts available for run $RUN_ID: $COUNT (attempt $i/$ATTEMPTS)"
-            if [ "$COUNT" -ge 3 ]; then
-              break
-            fi
-            sleep "$SLEEP_SECS"
-          done
-
-      - name: Download all artifacts from Build run (reliable)
-        if: env.RELEASE_COMPLETE != 'yes'
-        uses: actions/download-artifact@v4
-        with:
-          run-id: ${{ env.RUN_ID }}
-          path: ${{ env.PROJECT_DIR }}/dist
-          merge-multiple: true
-
-      - name: List downloaded files
-        if: env.RELEASE_COMPLETE != 'yes'
-        shell: bash
-        run: |
-          echo "Downloaded files under $PROJECT_DIR/dist:"
-          find "$PROJECT_DIR/dist" -type f -maxdepth 3 -print
-
-      - name: Ensure release exists
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          : "${TAG:?TAG not set}"
-          if ! gh release view "$TAG" >/dev/null 2>&1; then
-            echo "::error::No GitHub Release found for tag '$TAG'. Create it first, then re-run."
-            exit 1
-          fi
-
-      - name: Upload exactly Wexond-style 13 files (fast retries)
+      - name: Upload exactly Wexond-style 13 files (robust retries)
         if: env.RELEASE_COMPLETE != 'yes'
         shell: bash
         working-directory: ${{ env.PROJECT_DIR }}
@@ -326,8 +320,8 @@ jobs:
           upload_with_retry() {
             local file="$1"
             local base="$(basename "$file")"
-            local attempts=3      # keep total under ~2 min
-            local delay=4
+            local attempts=6
+            local delay=5
             for i in $(seq 1 "$attempts"); do
               echo "[$i/$attempts] Uploading $base ..."
               if gh release upload "$TAG" "$file" --clobber >/dev/null 2>&1; then
@@ -335,12 +329,12 @@ jobs:
                   echo "Uploaded and verified: $base"
                   return 0
                 fi
-                echo "Upload OK but $base not visible yet; short wait..."
+                echo "Upload returned OK but $base not visible yet; waiting..."
               else
-                echo "Upload failed for $base; retrying shortly..."
+                echo "Upload failed for $base; will retry..."
               fi
               sleep "$delay"
-              delay=$((delay * 2))  # 4s -> 8s -> 16s (max ~28s/file)
+              delay=$((delay * 2))
             done
             echo "::error::Failed to upload $base after multiple attempts."
             return 1
