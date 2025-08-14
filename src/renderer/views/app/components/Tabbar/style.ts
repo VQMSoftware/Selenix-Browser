@@ -13,6 +13,9 @@ export const StyledTabbar = styled.div`
   height: 100%;
   width: 100%;
   position: relative;
+  padding-right: var(--overlay-right-inset, 0px);
+  padding-left: var(--overlay-left-inset, 0px);
+
   overflow: hidden;
   align-items: center;
   margin-right: 32px;
@@ -40,6 +43,9 @@ export const TabsContainer = styled.div`
   height: 100%;
   width: calc(100% - ${TOOLBAR_BUTTON_WIDTH}px);
   position: relative;
+  padding-right: var(--overlay-right-inset, 0px);
+  padding-left: var(--overlay-left-inset, 0px);
+
   overflow: hidden;
   overflow-x: overlay;
   white-space: nowrap;
@@ -54,7 +60,7 @@ export const TabsContainer = styled.div`
 
 export const AddTab = styled(ToolbarButton)`
   position: absolute;
-  left: 0;
+  left: var(--overlay-left-inset, 0px);
   min-width: ${ADD_TAB_BUTTON_WIDTH}px;
   height: ${ADD_TAB_BUTTON_HEIGHT}px;
 

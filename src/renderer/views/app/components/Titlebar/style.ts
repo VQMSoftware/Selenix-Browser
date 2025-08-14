@@ -13,6 +13,9 @@ export const StyledTitlebar = styled.div`
   flex-flow: row;
   color: rgba(0, 0, 0, 0.8);
   width: 100%;
+  padding-right: var(--overlay-right-inset, 0px);
+  padding-left: var(--overlay-left-inset, 0px);
+
 
   &:before {
     position: absolute;
