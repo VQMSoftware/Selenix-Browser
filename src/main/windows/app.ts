@@ -24,17 +24,21 @@ export class AppWindow {
     const isWin = process.platform === 'win32';
     const isLinux = process.platform === 'linux';
 
+    // On Linux we want a frameless window so the custom titlebar is the only one shown.
+    // On Windows & macOS we keep the native frame and use the appropriate title bar styles.
     this.win = new BrowserWindow({
-      frame: isLinux,
+      frame: isLinux ? false : true,
       minWidth: 400,
       minHeight: 450,
       width: 900,
       height: 700,
-      titleBarStyle: isMac ? 'hiddenInset' : (isWin ? 'hidden' : 'default'),
+      // macOS uses hiddenInset. Windows uses hidden (overlay handled below). Linux ignores titleBarStyle.
+      titleBarStyle: isMac ? 'hiddenInset' : (isWin ? 'hidden' : undefined),
       backgroundColor: nativeTheme.shouldUseDarkColors ? '#939090ff' : '#ffffff',
       trafficLightPosition: isMac ? { x: 12, y: 12 } : undefined,
+      // Windows caption buttons overlay; not used on Linux.
       titleBarOverlay: isWin ? { color: nativeTheme.shouldUseDarkColors ? '#1f1f1f' : '#ffffff', symbolColor: nativeTheme.shouldUseDarkColors ? '#ffffff' : '#000000', height: 32 } : undefined,
-        webPreferences: {
+      webPreferences: {
         plugins: true,
         // TODO: enable sandbox, contextIsolation and disable nodeIntegration to improve security
         nodeIntegration: true,
@@ -48,7 +52,13 @@ export class AppWindow {
         `static/${isNightly ? 'nightly-icons' : 'icons'}/icon.png`,
       ),
       show: false,
+      // Hide the menu bar chrome (especially on Linux) so only the custom UI is visible.
+      autoHideMenuBar: true,
+      useContentSize: true,
     });
+
+    // Ensure the standard menubar is hidden on Linux at runtime too (covers DE quirks).
+    try { this.win.setMenuBarVisibility(false); } catch {}
 
     // Enable the remote module for this window's WebContents. Without this call
     // the remote API will not be available in renderers.
@@ -113,7 +123,10 @@ export class AppWindow {
       }
     })();
 
-    this.win.show();
+    // Show once ready to avoid flicker, especially on Linux when frameless.
+    this.win.once('ready-to-show', () => {
+      this.win.show();
+    });
 
     // Update window bounds on resize and on move when window is not maximized.
     this.win.on('resize', () => {
