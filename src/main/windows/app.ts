@@ -24,20 +24,24 @@ export class AppWindow {
     const isWin = process.platform === 'win32';
     const isLinux = process.platform === 'linux';
 
-    // On Linux we want a frameless window so the custom titlebar is the only one shown.
-    // On Windows & macOS we keep the native frame and use the appropriate title bar styles.
+    // Linux: use native frame so OS window controls are visible.
+    // Windows/macOS: keep custom chrome with hidden/overlay styles.
     this.win = new BrowserWindow({
-      frame: isLinux ? false : true,
+      frame: isLinux ? true : true, // native frame on Linux (overlay isn’t supported there)
       minWidth: 400,
       minHeight: 450,
       width: 900,
       height: 700,
-      // macOS uses hiddenInset. Windows uses hidden (overlay handled below). Linux ignores titleBarStyle.
       titleBarStyle: isMac ? 'hiddenInset' : (isWin ? 'hidden' : undefined),
       backgroundColor: nativeTheme.shouldUseDarkColors ? '#939090ff' : '#ffffff',
       trafficLightPosition: isMac ? { x: 12, y: 12 } : undefined,
-      // Windows caption buttons overlay; not used on Linux.
-      titleBarOverlay: isWin ? { color: nativeTheme.shouldUseDarkColors ? '#1f1f1f' : '#ffffff', symbolColor: nativeTheme.shouldUseDarkColors ? '#ffffff' : '#000000', height: 32 } : undefined,
+      titleBarOverlay: isWin
+        ? {
+            color: nativeTheme.shouldUseDarkColors ? '#1f1f1f' : '#ffffff',
+            symbolColor: nativeTheme.shouldUseDarkColors ? '#ffffff' : '#000000',
+            height: 32,
+          }
+        : undefined,
       webPreferences: {
         plugins: true,
         // TODO: enable sandbox, contextIsolation and disable nodeIntegration to improve security
@@ -52,12 +56,12 @@ export class AppWindow {
         `static/${isNightly ? 'nightly-icons' : 'icons'}/icon.png`,
       ),
       show: false,
-      // Hide the menu bar chrome (especially on Linux) so only the custom UI is visible.
+      // Hide the menubar chrome so it doesn’t add extra UI on Linux.
       autoHideMenuBar: true,
       useContentSize: true,
     });
 
-    // Ensure the standard menubar is hidden on Linux at runtime too (covers DE quirks).
+    // Ensure the standard menubar is hidden (covers DE quirks on Linux).
     try { this.win.setMenuBarVisibility(false); } catch {}
 
     // Enable the remote module for this window's WebContents. Without this call
@@ -87,7 +91,7 @@ export class AppWindow {
     };
     applyOverlayColors();
 
-    // React to OS / app theme changes (system or in‑app setting)
+    // React to OS / app theme changes (system or in-app setting)
     nativeTheme.on('updated', () => {
       applyOverlayColors();
     });
@@ -123,7 +127,7 @@ export class AppWindow {
       }
     })();
 
-    // Show once ready to avoid flicker, especially on Linux when frameless.
+    // Show once ready to avoid flicker.
     this.win.once('ready-to-show', () => {
       this.win.show();
     });
