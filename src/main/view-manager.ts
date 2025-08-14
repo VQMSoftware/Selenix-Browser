@@ -229,7 +229,7 @@ export class ViewManager extends EventEmitter {
         resizeObserver.observe(app);
       `);
 
-    this.window.webContents.on('ipc-message', (e, message) => {
+    this.window.webContents.on('ipc-message', (_event: unknown, message: string, ..._args: unknown[]) => {
       if (message === 'resize-height') {
         this.fixBounds();
       }
