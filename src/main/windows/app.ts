@@ -1,4 +1,4 @@
-import { BrowserWindow, app, dialog, nativeTheme } from 'electron';
+import { BrowserWindow, app, dialog, nativeTheme, Menu, ipcMain } from 'electron';
 // Pull in the enable function from @electron/remote/main so we can allow
 // remote access to this window's webContents. The remote API has been
 // extracted from Electron and must be explicitly enabled per WebContents.
@@ -24,18 +24,22 @@ export class AppWindow {
     const isWin = process.platform === 'win32';
     const isLinux = process.platform === 'linux';
 
-    // Linux: use native frame so OS window controls are visible.
+    // Linux: we go frameless so the OS bar isn't drawn; we rely on overlay if supported,
+    // or our own renderer buttons via IPC as a fallback (see handlers below).
     // Windows/macOS: keep custom chrome with hidden/overlay styles.
     this.win = new BrowserWindow({
-      frame: isLinux ? true : true, // native frame on Linux (overlay isn’t supported there)
+      frame: isLinux ? false : true,
       minWidth: 400,
       minHeight: 450,
       width: 900,
       height: 700,
-      titleBarStyle: isMac ? 'hiddenInset' : (isWin ? 'hidden' : undefined),
+      // macOS uses hiddenInset. Windows & Linux use hidden with overlay enabled below.
+      titleBarStyle: isMac ? 'hiddenInset' : ((isWin || isLinux) ? 'hidden' : undefined),
       backgroundColor: nativeTheme.shouldUseDarkColors ? '#939090ff' : '#ffffff',
       trafficLightPosition: isMac ? { x: 12, y: 12 } : undefined,
-      titleBarOverlay: isWin
+      // Enable overlay on Win/Linux to surface native-style window controls inside our bar.
+      // (Linux support depends on Electron/WM; we also provide an IPC fallback.)
+      titleBarOverlay: (isWin || isLinux)
         ? {
             color: nativeTheme.shouldUseDarkColors ? '#1f1f1f' : '#ffffff',
             symbolColor: nativeTheme.shouldUseDarkColors ? '#ffffff' : '#000000',
@@ -62,7 +66,11 @@ export class AppWindow {
     });
 
     // Ensure the standard menubar is hidden (covers DE quirks on Linux).
-    try { this.win.setMenuBarVisibility(false); } catch {}
+    try {
+      this.win.setMenuBarVisibility(false);
+      this.win.setMenu(null);
+      Menu.setApplicationMenu(null);
+    } catch {}
 
     // Enable the remote module for this window's WebContents. Without this call
     // the remote API will not be available in renderers.
@@ -73,8 +81,9 @@ export class AppWindow {
     this.viewManager = new ViewManager(this, incognito);
 
     // Keep Windows caption buttons & background in sync with app theme
+    // Apply overlay colors on Win/Linux and keep background in sync
     const applyOverlayColors = () => {
-      if (isWin) {
+      if (isWin || isLinux) {
         const dark = nativeTheme.shouldUseDarkColors;
         try {
           this.win.setTitleBarOverlay?.({
@@ -95,6 +104,36 @@ export class AppWindow {
     nativeTheme.on('updated', () => {
       applyOverlayColors();
     });
+
+    // ---- IPC fallback for Linux when overlays aren’t available ----
+    // Your renderer can call these if you decide to render your own buttons.
+    try { ipcMain.removeHandler('window-control'); } catch {}
+    ipcMain.handle('window-control', (_evt, action: string) => {
+      switch (action) {
+        case 'minimize': this.win.minimize(); break;
+        case 'maximize': this.win.maximize(); break;
+        case 'unmaximize': this.win.unmaximize(); break;
+        case 'toggle-maximize': this.win.isMaximized() ? this.win.unmaximize() : this.win.maximize(); break;
+        case 'close': this.win.close(); break;
+      }
+    });
+
+    // Emit platform + state so the renderer can adjust spacing/icons
+    const emitPlatformAndState = () => {
+      try {
+        this.send('platform', process.platform);
+        this.send('window-state', {
+          maximized: this.win.isMaximized(),
+          fullScreen: this.win.isFullScreen(),
+          focused: this.win.isFocused(),
+          // Simple feature flag the renderer can read to know overlays exist
+          overlaySupported: !!this.win.setTitleBarOverlay && (isWin || isLinux),
+        });
+      } catch {}
+    };
+    ['maximize','unmaximize','enter-full-screen','leave-full-screen','focus','blur']
+      .forEach(evt => this.win.on(evt as any, emitPlatformAndState));
+    this.win.webContents.on('did-finish-load', emitPlatformAndState);
 
     runMessagingService(this);
 
@@ -130,6 +169,7 @@ export class AppWindow {
     // Show once ready to avoid flicker.
     this.win.once('ready-to-show', () => {
       this.win.show();
+      emitPlatformAndState();
     });
 
     // Update window bounds on resize and on move when window is not maximized.
