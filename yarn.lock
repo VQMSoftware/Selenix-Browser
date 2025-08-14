@@ -8587,13 +8587,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"react-windows-controls@npm:1.1.1":
-  version: 1.1.1
-  resolution: "react-windows-controls@npm:1.1.1"
-  checksum: 10c0/75dabb630d7d5548b36752e8ca42c7d858a1539740b5cf31bc47eb02b2dd74ca52cda086e1585660a9d1846055f20c3e6c84611879d8cb4cb1255b2d155ffc3b
-  languageName: node
-  linkType: hard
-
 "react@npm:17.0.1":
   version: 17.0.1
   resolution: "react@npm:17.0.1"
@@ -9151,7 +9144,6 @@ __metadata:
     react-dom: "npm:17.0.1"
     react-is: "npm:^17.0.0"
     react-refresh: "npm:^0.10.0"
-    react-windows-controls: "npm:1.1.1"
     rimraf: "npm:^3.0.2"
     source-map-support: "npm:^0.5.19"
     styled-components: "npm:^5.2.1"
