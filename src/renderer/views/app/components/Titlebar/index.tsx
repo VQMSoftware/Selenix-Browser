@@ -1,27 +1,16 @@
 import { observer } from 'mobx-react-lite';
 import * as React from 'react';
 // Import ipcRenderer from electron and remote from the external package since
-// the built‑in remote was removed from recent Electron versions.
+// the built-in remote was removed from recent Electron versions.
 import { ipcRenderer } from 'electron';
 import * as remote from '@electron/remote';
 
 import store from '../../store';
 import { Tabbar } from '../Tabbar';
 import { platform } from 'os';
-import { WindowsControls } from 'react-windows-controls';
 import { StyledTitlebar, FullscreenExitButton } from './style';
 import { NavigationButtons } from '../NavigationButtons';
 import { RightButtons } from '../RightButtons';
-import { Separator } from '../RightButtons/style';
-import { SiteButtons } from '../SiteButtons';
-
-const onCloseClick = () => ipcRenderer.send(`window-close-${store.windowId}`);
-
-const onMaximizeClick = () =>
-  ipcRenderer.send(`window-toggle-maximize-${store.windowId}`);
-
-const onMinimizeClick = () =>
-  ipcRenderer.send(`window-minimize-${store.windowId}`);
 
 const onMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
   if (store.addressbarFocused) {
@@ -44,26 +33,17 @@ export const Titlebar = observer(() => {
       <Tabbar />
       {store.isCompact && <RightButtons />}
 
-      {platform() !== 'darwin' && (
-        store.isFullscreen
-          ? <FullscreenExitButton
-            style={{
-              height: store.isCompact ? '100%' : 32,
-            }}
-            onMouseUp={onFullscreenExit}
-            theme={store.theme}
-          />
-          : <WindowsControls
-            style={{
-              height: store.isCompact ? '100%' : 32,
-              WebkitAppRegion: 'no-drag',
-              marginLeft: 8,
-            }}
-            onClose={onCloseClick}
-            onMinimize={onMinimizeClick}
-            onMaximize={onMaximizeClick}
-            dark={store.theme['toolbar.lightForeground']}
-          />
+      {/* When using native OS window controls, we don't render custom controls.
+          On Linux, if we're in fullscreen, show an explicit exit button since
+          native controls are typically hidden in fullscreen. */}
+      {platform() === 'linux' && store.isFullscreen && (
+        <FullscreenExitButton
+          style={{
+            height: store.isCompact ? '100%' : 32,
+          }}
+          onMouseUp={onFullscreenExit}
+          theme={store.theme}
+        />
       )}
     </StyledTitlebar>
   );

@@ -1,4 +1,4 @@
-import { BrowserWindow, app, dialog } from 'electron';
+import { BrowserWindow, app, dialog, nativeTheme } from 'electron';
 // Pull in the enable function from @electron/remote/main so we can allow
 // remote access to this window's webContents. The remote API has been
 // extracted from Electron and must be explicitly enabled per WebContents.
@@ -20,14 +20,20 @@ export class AppWindow {
   public incognito: boolean;
 
   public constructor(incognito: boolean) {
+    const isMac = process.platform === 'darwin';
+    const isWin = process.platform === 'win32';
+    const isLinux = process.platform === 'linux';
+
     this.win = new BrowserWindow({
-      frame: false,
+      frame: isLinux,
       minWidth: 400,
       minHeight: 450,
       width: 900,
       height: 700,
-      titleBarStyle: 'hiddenInset',
-      backgroundColor: '#ffffff',
+      titleBarStyle: isMac ? 'hiddenInset' : (isWin ? 'hidden' : 'default'),
+      backgroundColor: nativeTheme.shouldUseDarkColors ? '#939090ff' : '#ffffff',
+      trafficLightPosition: isMac ? { x: 12, y: 12 } : undefined,
+      titleBarOverlay: isWin ? { color: nativeTheme.shouldUseDarkColors ? '#1f1f1f' : '#ffffff', symbolColor: nativeTheme.shouldUseDarkColors ? '#ffffff' : '#000000', height: 32 } : undefined,
         webPreferences: {
         plugins: true,
         // TODO: enable sandbox, contextIsolation and disable nodeIntegration to improve security
@@ -51,6 +57,30 @@ export class AppWindow {
     this.incognito = incognito;
 
     this.viewManager = new ViewManager(this, incognito);
+
+    // Keep Windows caption buttons & background in sync with app theme
+    const applyOverlayColors = () => {
+      if (isWin) {
+        const dark = nativeTheme.shouldUseDarkColors;
+        try {
+          this.win.setTitleBarOverlay?.({
+            color: dark ? '#1c1c1c' : '#d4d4d4',
+            symbolColor: dark ? '#ffffffff' : '#000000ff',
+            height: 32,
+          } as any);
+        } catch {}
+      }
+      try {
+        const dark = nativeTheme.shouldUseDarkColors;
+        this.win.setBackgroundColor(dark ? '#1f1f1f' : '#ffffff');
+      } catch {}
+    };
+    applyOverlayColors();
+
+    // React to OS / app theme changes (system or in‑app setting)
+    nativeTheme.on('updated', () => {
+      applyOverlayColors();
+    });
 
     runMessagingService(this);
 
@@ -141,7 +171,7 @@ export class AppWindow {
       windowState.fullscreen = this.win.isFullScreen();
       writeFileSync(windowDataPath, JSON.stringify(windowState));
 
-      this.win.setContentView(null);
+      // Removed unsafe call: this.win.setContentView(null);
 
       this.viewManager.clear();
 
@@ -216,7 +246,15 @@ export class AppWindow {
   }
 
   public get webContents() {
-    return this.win.webContents;
+    // Guard against destroyed window/webContents to avoid runtime errors
+    try {
+      if (!this.win || this.win.isDestroyed()) return null as any;
+      const wc = this.win.webContents as any;
+      if (!wc || (typeof wc.isDestroyed === "function" && wc.isDestroyed())) return null as any;
+      return wc;
+    } catch {
+      return null as any;
+    }
   }
 
   public fixDragging() {
@@ -228,7 +266,9 @@ export class AppWindow {
   }
 
   public send(channel: string, ...args: any[]) {
-    this.webContents.send(channel, ...args);
+    const wc = this.webContents as any;
+    if (!wc) { return; }
+    try { wc.send(channel, ...args); } catch { /* swallow if window is gone */ }
   }
 
   public updateTitle() {

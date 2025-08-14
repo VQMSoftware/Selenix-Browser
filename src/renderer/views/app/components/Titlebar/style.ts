@@ -38,6 +38,9 @@ export const StyledTitlebar = styled.div`
     align-items: ${theme.isCompact ? 'center' : 'initial'};
     padding-left: ${platform() === 'darwin' && !isFullscreen ? 78 : 4}px;
 
+    /* Reserve space for native Win caption buttons */
+    padding-right: ${platform() === 'win32' && !isFullscreen ? 'calc(var(--overlay-right-inset, 120px) + 8px)' : 4}px;
+
     &:before {
       -webkit-app-region: ${isFullscreen ? 'no-drag' : 'drag'};
     }
