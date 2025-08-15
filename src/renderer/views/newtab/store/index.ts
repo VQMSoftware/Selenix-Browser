@@ -31,7 +31,8 @@ export class Store {
     this._newsBehavior = value;
 
     if (value === 'always-visible') {
-      this.loadNews();
+      // Ensure we have at least one page of news ready
+      this.loadNews().catch(console.error);
     }
   }
 
@@ -49,7 +50,7 @@ export class Store {
 
   public set imageVisible(value: boolean) {
     this._imageVisible = value;
-    if (value && this.image == '') this.loadImage();
+    if (value && this.image === '') this.loadImage();
   }
 
   @computed
@@ -62,10 +63,17 @@ export class Store {
 
   public get changeImageDaily() { return this._changeImageDaily; }
   public set changeImageDaily(value: boolean) {
+    const was = this._changeImageDaily;
     this._changeImageDaily = value;
     try { localStorage.setItem('changeImageDaily', JSON.stringify(value)); } catch {}
-    if (value) {
-      try { localStorage.removeItem('imageURL'); localStorage.removeItem('imageDate'); } catch {}
+
+    // Only clear & refetch when toggling from false -> true.
+    if (!was && value) {
+      try {
+        localStorage.removeItem('imageURL');
+        localStorage.removeItem('imageDate');
+        localStorage.removeItem('imageData'); // clear cached pixels
+      } catch {}
       this.image = '';
       if (this.imageVisible) this.loadImage();
     }
@@ -123,7 +131,8 @@ export class Store {
     if (['focused', 'informational', 'inspirational'].includes(value)) {
       this.quickMenuVisible = true;
       this.topSitesVisible = true;
-      this.changeImageDaily = true;
+      // Only set to true if it's not already true, to avoid wiping cache.
+      if (!this._changeImageDaily) this.changeImageDaily = true;
     }
 
     if (['focused', 'inspirational'].includes(value)) {
@@ -156,30 +165,32 @@ export class Store {
       this.settings = { ...this.settings, ...settings };
     };
 
-    this.preset = localStorage.getItem('preset') as Preset;
+    this._preset = (localStorage.getItem('preset') as Preset) || this._preset;
 
-    if (this.preset === 'custom') {
+    if (this._preset === 'custom') {
       [
         'changeImageDaily',
         'quickMenuVisible',
         'topSitesVisible',
         'imageVisible',
-      ].forEach(
-        (x) =>
-          ((this as any)[x] =
-            localStorage.getItem(x) == null
-              ? (this as any)[x]
-              : JSON.parse(localStorage.getItem(x))),
-      );
+      ].forEach((x) => {
+        const raw = localStorage.getItem(x);
+        (this as any)[x] = raw == null ? (this as any)[x] : JSON.parse(raw);
+      });
 
-      this.newsBehavior = localStorage.getItem('newsBehavior') as NewsBehavior;
+      const nb = localStorage.getItem('newsBehavior') as NewsBehavior | null;
+      if (nb) this.newsBehavior = nb;
+    } else {
+      // Apply preset without resetting daily cache unnecessarily
+      this.preset = this._preset;
     }
 
     if (this.imageVisible) {
       this.loadImage();
     }
 
-    this.loadTopSites();
+    // Load top sites initially
+    this.loadTopSites().catch(console.error);
 
     // window.onscroll = () => {
     //   this.updateNews();
@@ -191,81 +202,106 @@ export class Store {
   }
 
   public async loadImage() {
-    let url = localStorage.getItem('imageURL');
-    let isNewUrl = false;
+    // Stable local "today" key
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = (now.getMonth() + 1).toString().padStart(2, '0');
+    const d = now.getDate().toString().padStart(2, '0');
+    const todayKey = `${y}-${m}-${d}`;
 
-    if (this.changeImageDaily) {
-      const dateString = localStorage.getItem('imageDate');
+    // Normalize stored date (supports old formats)
+    const toKey = (s: string): string | null => {
+      if (!s) return null;
+      if (/\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+      const dt = new Date(s);
+      if (isNaN(dt.getTime())) return null;
+      const yy = dt.getFullYear();
+      const mm = (dt.getMonth() + 1).toString().padStart(2, '0');
+      const dd = dt.getDate().toString().padStart(2, '0');
+      return `${yy}-${mm}-${dd}`;
+    };
 
-      if (dateString && dateString !== '') {
-        const date = new Date(dateString);
-        const date2 = new Date();
-        const diffTime = Math.floor(
-          (date2.getTime() - date.getTime()) / (1000 * 60 * 60 * 24),
-        );
+    const savedDate = localStorage.getItem('imageDate') || '';
+    const savedKey = toKey(savedDate);
+    const cachedDataUrl = localStorage.getItem('imageData'); // cached pixels
 
-        if (diffTime > 1) {
-          url = '';
-          isNewUrl = true;
-        }
+    // If daily mode ON and we already have today's pixels, use them without any network request.
+    if (this._changeImageDaily && cachedDataUrl && savedKey === todayKey) {
+      this.image = cachedDataUrl;
+      return;
+    }
+
+    // Otherwise, fetch a new image and cache the actual pixels as a data URL.
+    const pickUrl = () => {
+      // If you have a "custom provider" toggle elsewhere, branch here.
+      return 'https://picsum.photos/1920/1080';
+    };
+
+    const url = pickUrl();
+
+    try {
+      const resp = await fetch(url);
+      const blob = await resp.blob();
+
+      // Convert blob -> data URL so we store exact pixels and avoid provider randomness
+      const dataUrl: string = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+
+      this.image = dataUrl;
+
+      // Persist both the resolved URL (optional) and the actual pixels (mandatory)
+      try {
+        localStorage.setItem('imageURL', resp.url || url);
+        localStorage.setItem('imageData', dataUrl);
+        localStorage.setItem('imageDate', todayKey);
+      } catch {
+        // ignore quota/failure
+      }
+    } catch (e) {
+      console.error(e);
+      // If fetch fails but we have any cached pixels, prefer showing them
+      if (cachedDataUrl) {
+        this.image = cachedDataUrl;
       }
     }
-
-    if (!url || url == '') {
-      url = 'https://picsum.photos/1920/1080';
-      isNewUrl = true;
-    }
-
-    fetch(url)
-      .then((response) => Promise.all([response.url, response.blob()]))
-      .then(([resource, blob]) => {
-        this.image = URL.createObjectURL(blob);
-
-        return resource;
-      })
-      .then((imgUrl) => {
-        if (isNewUrl) {
-          localStorage.setItem('imageURL', imgUrl);
-          localStorage.setItem('imageDate', new Date().toString());
-        }
-      })
-      .catch((e) => console.error(e));
   }
 
-  public async updateNews() {
-    const scrollPos = window.scrollY;
-    const scrollMax =
-      document.body.scrollHeight - document.body.clientHeight - 768;
+  // === Methods required elsewhere ===
 
-    if (scrollPos >= scrollMax && this.loaded && this.page !== 10) {
-      this.page++;
-      this.loaded = false;
-      try {
-        await this.loadNews();
-      } catch (e) {
-        console.error(e);
-      }
-      this.loaded = true;
+  public async loadTopSites() {
+    try {
+      this.topSites = await (window as any).getTopSites(8);
+    } catch (e) {
+      console.error('loadTopSites failed:', e);
+      this.topSites = [];
     }
   }
 
   public async loadNews() {
     try {
-      const { data } = await networkMainChannel.getInvoker().request(''); // ?lang=
+      // Replace '' with your real endpoint or add params like ?lang=
+      const { data } = await networkMainChannel.getInvoker().request('');
       const json = JSON.parse(data);
 
-      if (json.articles) {
-        this.news = this.news.concat(json.articles);
+      if (json && Array.isArray(json.articles)) {
+        if (this.page === 1) {
+          this.news = json.articles;
+        } else {
+          this.news = this.news.concat(json.articles);
+        }
+        this.page += 1;
+        this.loaded = true;
       } else {
         throw new Error('Error fetching news');
       }
     } catch (e) {
+      console.error('loadNews failed:', e);
       throw e;
     }
-  }
-
-  public async loadTopSites() {
-    this.topSites = await (window as any).getTopSites(8);
   }
 }
 
