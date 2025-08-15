@@ -54,14 +54,14 @@ As developers, many of us have attempted to compile Chromium from source, only t
 
 # Screenshots
 
-![image](https://user-images.githubusercontent.com/11065386/81024159-d9388f80-8e72-11ea-85e7-6c30e3b66554.png)
+<img width="1919" height="1032" alt="Screenshot 2025-08-15 132049" src="https://github.com/user-attachments/assets/939cd63b-144d-430d-a187-58d76ce707b1" />
 
 UI normal variant:
-![image](https://user-images.githubusercontent.com/11065386/81024186-f40b0400-8e72-11ea-976e-cd1ca1b43ad8.png)
+<img width="1919" height="78" alt="top" src="https://github.com/user-attachments/assets/5b6fbab5-ac1e-4eb9-932a-1cffe9d3b0e2" />
 
 UI compact variant:
-![image](https://user-images.githubusercontent.com/11065386/81024222-13099600-8e73-11ea-9fc9-3c63a034403d.png)
-![image](https://user-images.githubusercontent.com/11065386/81024252-2ddc0a80-8e73-11ea-9f2f-6c9a4a175c60.png)
+<img width="1919" height="38" alt="Screenshot 2025-08-15 131407" src="https://github.com/user-attachments/assets/52f49a87-e7aa-4f5a-9e22-83284a75b2dd" />
+<img width="1919" height="37" alt="Screenshot 2025-08-15 131424" src="https://github.com/user-attachments/assets/fa1fa33c-6ae5-4542-9c7b-b05870699fc7" />
 
 # Downloads
 - [Stable](https://github.com/VQMSoftware/Selenix-Browser/releases)
