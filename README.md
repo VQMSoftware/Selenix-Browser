@@ -77,7 +77,7 @@ to switch between node versions you will need nvm (node version mamager) which y
 
 ### Windows
 
-Make sure you have build tools installed. You can install them by running this command as **administrator**:
+Make sure you have corepack enabled. You can do so by running this command as **administrator**:
 
 ```bash
 $ corepack enable # enables corepack for node.js
