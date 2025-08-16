@@ -66,6 +66,7 @@ export class DialogsService {
         nodeIntegration: true,
         contextIsolation: false,
         backgroundThrottling: false,
+        webviewTag: true,
       },
     });
 
