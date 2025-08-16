@@ -1,4 +1,4 @@
-import { observable, computed, makeObservable } from 'mobx';
+import { observable, computed, makeObservable, autorun } from 'mobx';
 import { ISettings, ITheme, IVisitedItem } from '~/interfaces';
 import { getTheme } from '~/utils/themes';
 import { INewsItem } from '~/interfaces/news-item';
@@ -29,16 +29,11 @@ export class Store {
 
   public set newsBehavior(value: NewsBehavior) {
     this._newsBehavior = value;
-
-    if (value === 'always-visible') {
-      // Ensure we have at least one page of news ready
-      this.loadNews().catch(console.error);
-    }
+    if (value === 'always-visible') this.loadNews().catch(console.error);
   }
 
   @computed
   public get fullSizeImage() {
-    // return this.newsBehavior === 'on-scroll' || this.newsBehavior === 'hidden';
     return true;
   }
 
@@ -61,21 +56,61 @@ export class Store {
   @observable
   private _changeImageDaily = true;
 
-  public get changeImageDaily() { return this._changeImageDaily; }
+  public get changeImageDaily() {
+    return this._changeImageDaily;
+  }
   public set changeImageDaily(value: boolean) {
     const was = this._changeImageDaily;
     this._changeImageDaily = value;
-    try { localStorage.setItem('changeImageDaily', JSON.stringify(value)); } catch {}
+    try {
+      localStorage.setItem('changeImageDaily', JSON.stringify(value));
+    } catch {}
 
-    // Only clear & refetch when toggling from false -> true.
-    if (!was && value) {
-      try {
-        localStorage.removeItem('imageURL');
-        localStorage.removeItem('imageDate');
-        localStorage.removeItem('imageData'); // clear cached pixels
-      } catch {}
-      this.image = '';
-      if (this.imageVisible) this.loadImage();
+    if (value) {
+      // === Turning daily ON ===
+      const todayKey = this.getTodayKey();
+      const currentImg = this.image || '';
+      const custom = this.getStoredCustomImage();
+      const isUsingCustomNow = !!custom && currentImg === custom;
+
+      if (isUsingCustomNow) {
+        // If a custom image is currently shown, switch to a fresh daily image immediately.
+        try {
+          localStorage.removeItem('imageURL');
+          localStorage.removeItem('imageData');
+          localStorage.removeItem('imageDate');
+        } catch {}
+        this.image = '';
+        if (this.imageVisible) this.loadImage(); // will fetch & cache today's daily
+      } else {
+        // Not using custom right now: keep whatever is on-screen for the rest of today.
+        try {
+          if (currentImg) {
+            if (currentImg.startsWith('data:')) {
+              localStorage.setItem('imageData', currentImg);
+              localStorage.setItem('imageURL', currentImg);
+            } else {
+              localStorage.setItem('imageURL', currentImg);
+            }
+            localStorage.setItem('imageDate', todayKey);
+          } else if (this.imageVisible) {
+            // No image yet -> fetch one now
+            this.loadImage();
+          }
+        } catch {
+          // ignore quota errors
+        }
+      }
+    } else {
+      // === Turning daily OFF ===
+      if (this._preset === 'custom') {
+        const custom = this.getStoredCustomImage();
+        if (custom) this.image = custom;
+      }
+    }
+
+    if (!was && value && this.image === '' && this.imageVisible) {
+      this.loadImage();
     }
   }
 
@@ -106,10 +141,7 @@ export class Store {
 
   public set dashboardSettingsVisible(value: boolean) {
     this._dashboardSettingsVisible = value;
-
-    if (!value) {
-      this.preferencesContent = 'main';
-    }
+    if (!value) this.preferencesContent = 'main';
   }
 
   @computed
@@ -131,7 +163,6 @@ export class Store {
     if (['focused', 'informational', 'inspirational'].includes(value)) {
       this.quickMenuVisible = true;
       this.topSitesVisible = true;
-      // Only set to true if it's not already true, to avoid wiping cache.
       if (!this._changeImageDaily) this.changeImageDaily = true;
     }
 
@@ -150,6 +181,17 @@ export class Store {
     }
 
     localStorage.setItem('preset', value);
+
+    // If leaving custom -> non-custom, let daily take over next load.
+    if (value !== 'custom') {
+      if (this.imageVisible && this.image === '') this.loadImage();
+    } else {
+      // If entering custom with daily OFF and a custom exists, show it.
+      if (!this._changeImageDaily) {
+        const custom = this.getStoredCustomImage();
+        if (custom) this.image = custom;
+      }
+    }
   }
 
   private page = 1;
@@ -158,7 +200,7 @@ export class Store {
   @observable
   public topSites: IVisitedItem[] = [];
 
-  public constructor() {
+  constructor() {
     makeObservable(this);
 
     (window as any).updateSettings = (settings: ISettings) => {
@@ -167,52 +209,79 @@ export class Store {
 
     this._preset = (localStorage.getItem('preset') as Preset) || this._preset;
 
-    if (this._preset === 'custom') {
-      [
-        'changeImageDaily',
-        'quickMenuVisible',
-        'topSitesVisible',
-        'imageVisible',
-      ].forEach((x) => {
-        const raw = localStorage.getItem(x);
-        (this as any)[x] = raw == null ? (this as any)[x] : JSON.parse(raw);
-      });
+    [
+      'changeImageDaily',
+      'quickMenuVisible',
+      'topSitesVisible',
+      'imageVisible',
+    ].forEach((x) => {
+      const raw = localStorage.getItem(x);
+      if (raw != null) {
+        try {
+          (this as any)[x] = JSON.parse(raw);
+        } catch {
+          (this as any)[x] = raw === 'true';
+        }
+      }
+    });
 
-      const nb = localStorage.getItem('newsBehavior') as NewsBehavior | null;
-      if (nb) this.newsBehavior = nb;
-    } else {
-      // Apply preset without resetting daily cache unnecessarily
-      this.preset = this._preset;
+    const nb = localStorage.getItem('newsBehavior') as NewsBehavior | null;
+    if (nb) this.newsBehavior = nb;
+
+    // Initial image selection
+    if (!this._changeImageDaily && this._preset === 'custom') {
+      const custom = this.getStoredCustomImage();
+      if (custom) this.image = custom;
     }
 
-    if (this.imageVisible) {
+    if (this.imageVisible && this.image === '') {
       this.loadImage();
     }
 
-    // Load top sites initially
     this.loadTopSites().catch(console.error);
 
-    // window.onscroll = () => {
-    //   this.updateNews();
-    // };
+    // Persist new custom image automatically ONLY when daily is OFF and preset is custom.
+    autorun(() => {
+      if (this._preset !== 'custom' || this._changeImageDaily) return;
+      const img = this.image;
+      if (!img || !img.startsWith('data:')) return;
 
-    // window.onresize = () => {
-    //   this.updateNews();
-    // };
+      try {
+        localStorage.setItem('customImageData', img);
+        localStorage.setItem('imageDate', this.getTodayKey());
+      } catch {
+        // ignore quota errors
+      }
+    });
   }
 
-  public async loadImage() {
-    // Stable local "today" key
+  /** YYYY-MM-DD string for "today". */
+  private getTodayKey(): string {
     const now = new Date();
     const y = now.getFullYear();
     const m = (now.getMonth() + 1).toString().padStart(2, '0');
     const d = now.getDate().toString().padStart(2, '0');
-    const todayKey = `${y}-${m}-${d}`;
+    return `${y}-${m}-${d}`;
+  }
 
-    // Normalize stored date (supports old formats)
-    const toKey = (s: string): string | null => {
+  /**
+   * Custom image helper: read ONLY the custom key.
+   */
+  private getStoredCustomImage(): string | null {
+    try {
+      const custom = localStorage.getItem('customImageData');
+      return custom || null;
+    } catch {
+      return null;
+    }
+  }
+
+  public async loadImage() {
+    const todayKey = this.getTodayKey();
+
+    const normKey = (s: string | null): string | null => {
       if (!s) return null;
-      if (/\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+      if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
       const dt = new Date(s);
       if (isNaN(dt.getTime())) return null;
       const yy = dt.getFullYear();
@@ -221,51 +290,85 @@ export class Store {
       return `${yy}-${mm}-${dd}`;
     };
 
-    const savedDate = localStorage.getItem('imageDate') || '';
-    const savedKey = toKey(savedDate);
-    const cachedDataUrl = localStorage.getItem('imageData'); // cached pixels
+    // === Priority 1: DAILY FLOW when changeImageDaily is ON (ignore custom) ===
+    if (this._changeImageDaily) {
+      // Read ONLY daily keys (and reuse if it's today's).
+      let storedData: string | null = null;
+      let storedDate: string | null = null;
+      try {
+        storedData = localStorage.getItem('imageData') || localStorage.getItem('imageURL');
+        storedDate = normKey(localStorage.getItem('imageDate'));
+      } catch {}
 
-    // If daily mode ON and we already have today's pixels, use them without any network request.
-    if (this._changeImageDaily && cachedDataUrl && savedKey === todayKey) {
-      this.image = cachedDataUrl;
+      if (storedDate === todayKey && storedData) {
+        // Already have today's exact pixels -> reuse so reload doesn't change the image.
+        this.image = storedData;
+        return;
+      }
+
+      // Fetch a fresh daily image and persist it as a DATA URL (pixels), not a hot link.
+      const url = 'https://picsum.photos/1920/1080';
+
+      try {
+        const resp = await fetch(url);
+        const blob = await resp.blob();
+
+        const dataUrl: string = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+        });
+
+        this.image = dataUrl;
+
+        try {
+          // Persist exact pixels so reloads show the same image until the date changes.
+          localStorage.setItem('imageURL', dataUrl);
+          localStorage.setItem('imageData', dataUrl);
+          localStorage.setItem('imageDate', todayKey);
+        } catch {}
+      } catch (e) {
+        console.error(e);
+        // Fallback to any stored pixels
+        if (storedData) this.image = storedData;
+      }
       return;
     }
 
-    // Otherwise, fetch a new image and cache the actual pixels as a data URL.
-    const pickUrl = () => {
-      // If you have a "custom provider" toggle elsewhere, branch here.
-      return 'https://picsum.photos/1920/1080';
-    };
-
-    const url = pickUrl();
-
-    try {
-      const resp = await fetch(url);
-      const blob = await resp.blob();
-
-      // Convert blob -> data URL so we store exact pixels and avoid provider randomness
-      const dataUrl: string = await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result as string);
-        reader.onerror = reject;
-        reader.readAsDataURL(blob);
-      });
-
-      this.image = dataUrl;
-
-      // Persist both the resolved URL (optional) and the actual pixels (mandatory)
-      try {
-        localStorage.setItem('imageURL', resp.url || url);
-        localStorage.setItem('imageData', dataUrl);
-        localStorage.setItem('imageDate', todayKey);
-      } catch {
-        // ignore quota/failure
+    // === Priority 2: CUSTOM FLOW when daily is OFF ===
+    if (this._preset === 'custom') {
+      const custom = this.getStoredCustomImage();
+      if (custom) {
+        this.image = custom;
+        return;
       }
-    } catch (e) {
-      console.error(e);
-      // If fetch fails but we have any cached pixels, prefer showing them
-      if (cachedDataUrl) {
-        this.image = cachedDataUrl;
+      this.image = '';
+      return;
+    }
+
+    // === Fallback: daily OFF, non-custom preset => use last daily if any ===
+    let storedData: string | null = null;
+    try {
+      storedData = localStorage.getItem('imageData') || localStorage.getItem('imageURL');
+    } catch {}
+    if (storedData) {
+      this.image = storedData;
+    } else {
+      // nothing stored; fetch once as pixels
+      const url = 'https://picsum.photos/1920/1080';
+      try {
+        const resp = await fetch(url);
+        const blob = await resp.blob();
+        const dataUrl: string = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+        });
+        this.image = dataUrl;
+      } catch (e) {
+        console.error(e);
       }
     }
   }
@@ -283,7 +386,6 @@ export class Store {
 
   public async loadNews() {
     try {
-      // Replace '' with your real endpoint or add params like ?lang=
       const { data } = await networkMainChannel.getInvoker().request('');
       const json = JSON.parse(data);
 
