@@ -33,6 +33,75 @@ import {
 } from '~/renderer/constants/icons';
 import { getWebUIURL } from '~/common/webui';
 
+
+// === StrictMode + stable-layout first-open fade ===
+const __useInsertion: typeof React.useLayoutEffect =
+  // Prefer useInsertionEffect (pre-paint), fall back to layout effect if not available
+  (React as any).useInsertionEffect || React.useLayoutEffect;
+
+function __primeHidden(el: HTMLElement) {
+  el.style.visibility = 'hidden';
+  el.style.opacity = '0';
+  el.style.transform = 'translateY(6px)';
+  el.style.willChange = 'opacity, transform';
+}
+
+function __animateIn(el: HTMLElement) {
+  el.style.transition = 'opacity 160ms ease, transform 200ms ease';
+  // force a reflow to commit initial styles
+  void el.offsetWidth;
+  requestAnimationFrame(() => {
+    el.style.visibility = 'visible';
+    el.style.opacity = '1';
+    el.style.transform = 'translateY(0)';
+  });
+}
+
+function __waitStableLayout(el: HTMLElement, timeoutMs = 350): Promise<void> {
+  return new Promise((resolve) => {
+    const start = performance.now();
+    let prevW = -1, prevH = -1;
+    let stableFrames = 0;
+    function tick() {
+      if (!el.isConnected) {
+        if (performance.now() - start > timeoutMs) return resolve();
+        return requestAnimationFrame(tick);
+      }
+      const r = el.getBoundingClientRect();
+      const w = Math.round(r.width);
+      const h = Math.round(r.height);
+      if (w === prevW && h === prevH && (w > 0 || h > 0)) {
+        stableFrames += 1;
+      } else {
+        stableFrames = 0;
+        prevW = w; prevH = h;
+      }
+      if (stableFrames >= 2) {
+        return resolve();
+      }
+      if (performance.now() - start > timeoutMs) {
+        return resolve();
+      }
+      requestAnimationFrame(tick);
+    }
+    requestAnimationFrame(tick);
+  });
+}
+
+async function __readyThenAnimate(el: HTMLElement, didRef: { current: boolean }) {
+  if (didRef.current) return; // guard StrictMode double-call
+  didRef.current = true;
+  try {
+    if ('fonts' in document && (document as any).fonts?.ready) {
+      await (document as any).fonts.ready;
+    }
+  } catch {}
+  await __waitStableLayout(el, 400);
+  __animateIn(el);
+}
+// === /fix ===
+
+
 const onFindClick = () => {
   /*
   // TODO(sentialx): get selected tab
@@ -98,8 +167,25 @@ const onUpdateClick = () => {
 };
 
 export const QuickMenu = observer(() => {
+  const __qmRef = React.useRef<HTMLDivElement | null>(null);
+  const __didOnce = React.useRef(false);
+
+  // Pre-paint hide to avoid flicker even in StrictMode
+  __useInsertion(() => {
+    const el = __qmRef.current;
+    if (!el) return;
+    __primeHidden(el);
+  }, []);
+
+  // After mount, wait for layout to settle, then animate exactly once
+  React.useLayoutEffect(() => {
+    const el = __qmRef.current;
+    if (!el || __didOnce.current) return;
+    __readyThenAnimate(el, __didOnce);
+  }, []);
+
   return (
-    <div
+    <div ref={__qmRef}
       style={{
         display: 'flex',
         flexFlow: 'column',
