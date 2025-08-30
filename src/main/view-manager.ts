@@ -4,6 +4,7 @@ import { View } from './view';
 import { AppWindow } from './windows';
 import { WEBUI_BASE_URL } from '~/constants/files';
 import { Application } from './application';
+import { DevToolsTracker } from './utils/devtools-tracker';
 
 import {
   ZOOM_FACTOR_MIN,
@@ -159,6 +160,9 @@ export class ViewManager extends EventEmitter {
     const { id } = view;
 
     this.views.set(id, view);
+
+    // Enable persistent devtools mode tracking for this view
+    DevToolsTracker.track(webContents);
 
     if (process.env.ENABLE_EXTENSIONS) {
       // Register the tab with electron-chrome-extensions so that

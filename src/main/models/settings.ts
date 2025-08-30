@@ -143,6 +143,11 @@ export class Settings extends EventEmitter {
         delete json.darkTheme;
       }
 
+      // Migrate devToolsMode setting (default to 'bottom' if not present)
+      if (json.devToolsMode === undefined) {
+        json.devToolsMode = 'bottom';
+      }
+
       this.object = {
         ...this.object,
         ...json,
