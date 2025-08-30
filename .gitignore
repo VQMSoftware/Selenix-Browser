@@ -13,3 +13,6 @@ chunks-entries-map.json
 .idea
 .yarn
 yarn.lock
+
+# DevTools settings integration test
+test-devtools-settings.js
