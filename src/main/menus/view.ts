@@ -10,9 +10,8 @@ import {
 } from 'electron';
 import { isURL, prefixHttp } from '~/utils';
 import { saveAs, viewSource, printPage } from './common-actions';
-
-// Store last DevTools mode in memory for the session (default to 'bottom')
-let lastDevToolsMode: 'right' | 'bottom' | 'undocked' | 'detach' = 'bottom';
+import { Application } from '../application';
+import { DevToolsTracker } from '../utils/devtools-tracker';
 
 export const getViewMenu = (
   appWindow: AppWindow,
@@ -280,22 +279,19 @@ export const getViewMenu = (
     label: 'Inspect',
     accelerator: 'CmdOrCtrl+Shift+I',
     click: () => {
+      // Get current devtools mode from settings
+      const currentDevToolsMode = DevToolsTracker.getCurrentMode();
+      
       webContents.inspectElement(params.x, params.y);
-      // Always open DevTools in the last used mode (default to 'bottom')
+      // Always open DevTools in the user's preferred mode
       if (!webContents.isDevToolsOpened()) {
-        webContents.openDevTools({ mode: lastDevToolsMode });
+        webContents.openDevTools({ mode: currentDevToolsMode });
       } else {
-        webContents.devToolsWebContents.focus();
+        webContents.devToolsWebContents?.focus();
       }
-      // Listen for user changing the dock state and remember it for this session only
-      const devTools = webContents.devToolsWebContents;
-      if (devTools && !devTools.listenerCount('devtools-dock-state-changed')) {
-        devTools.on('devtools-dock-state-changed', (_event, dockState) => {
-          if (dockState === 'right' || dockState === 'bottom' || dockState === 'undocked' || dockState === 'detach') {
-            lastDevToolsMode = dockState;
-          }
-        });
-      }
+      
+      // Start tracking devtools for this webContents to detect mode changes
+      DevToolsTracker.track(webContents);
     },
   });
 

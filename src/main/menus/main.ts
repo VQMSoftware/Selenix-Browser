@@ -287,7 +287,18 @@ export const getMainMenu = () => {
               ['CmdOrCtrl+Shift+I', 'CmdOrCtrl+Shift+J', 'F12'],
               () => {
                 setTimeout(() => {
-                  Application.instance.windows.current.viewManager.selected.webContents.toggleDevTools();
+                  const webContents = Application.instance.windows.current.viewManager.selected.webContents;
+                  const settings = Application.instance.settings;
+                  const devToolsMode = settings.object.devToolsMode || 'bottom';
+                  
+                  if (webContents.isDevToolsOpened()) {
+                    webContents.closeDevTools();
+                  } else {
+                    webContents.openDevTools({ mode: devToolsMode });
+                    // Import DevToolsTracker here to avoid circular dependencies
+                    const { DevToolsTracker } = require('../utils/devtools-tracker');
+                    DevToolsTracker.track(webContents);
+                  }
                 });
               },
               'Developer tools...',
@@ -296,9 +307,11 @@ export const getMainMenu = () => {
             // Developer tools (current webContents) (dev)
             ...createMenuItem(['CmdOrCtrl+Shift+F12'], () => {
               setTimeout(() => {
+                const settings = Application.instance.settings;
+                const devToolsMode = settings.object.devToolsMode || 'detach';
                 webContents
                   .getFocusedWebContents()
-                  .openDevTools({ mode: 'detach' });
+                  .openDevTools({ mode: devToolsMode });
               });
             }),
           ],
