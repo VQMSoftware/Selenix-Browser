@@ -53,6 +53,13 @@ export class Settings extends EventEmitter {
       this.addToQueue();
     });
 
+    ipcMain.on('devtools-position-change', (e, position: string) => {
+      if (['bottom', 'left', 'right', 'detach'].includes(position)) {
+        this.object.devToolsPosition = position as any;
+        this.addToQueue();
+      }
+    });
+
     nativeTheme.on('updated', () => {
       this.update();
     });
@@ -141,6 +148,11 @@ export class Settings extends EventEmitter {
 
       if (json.darkTheme !== undefined) {
         delete json.darkTheme;
+      }
+
+      // Add devToolsPosition if it doesn't exist (migration)
+      if (json.devToolsPosition === undefined) {
+        json.devToolsPosition = 'bottom';
       }
 
       this.object = {

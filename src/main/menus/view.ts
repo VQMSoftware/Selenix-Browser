@@ -9,6 +9,7 @@ import {
 } from 'electron';
 import { isURL, prefixHttp } from '~/utils';
 import { saveAs, viewSource, printPage } from './common-actions';
+import { Application } from '../application';
 
 export const getViewMenu = (
   appWindow: AppWindow,
@@ -275,8 +276,16 @@ export const getViewMenu = (
     label: 'Inspect',
     accelerator: 'CmdOrCtrl+Shift+I',
     click: () => {
+      const { devToolsPosition } = Application.instance.settings.object;
+      
+      // Close dev tools if they're open in the wrong position, then reopen in correct position
+      if (webContents.isDevToolsOpened()) {
+        webContents.closeDevTools();
+      }
+      
       webContents.inspectElement(params.x, params.y);
-
+      
+      // The dev tools should now be open in the correct position
       if (webContents.isDevToolsOpened()) {
         webContents.devToolsWebContents.focus();
       }

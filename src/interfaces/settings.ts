@@ -12,6 +12,8 @@ export interface IStartupBehavior {
 
 export type TopBarVariant = 'default' | 'compact';
 
+export type DevToolsPosition = 'bottom' | 'left' | 'right' | 'detach';
+
 export interface ISettings {
   theme: string;
   themeAuto: boolean;
@@ -30,4 +32,5 @@ export interface ISettings {
   downloadsPath: string;
   doNotTrack: boolean;
   topBarVariant: TopBarVariant;
+  devToolsPosition: DevToolsPosition;
 }

@@ -9,6 +9,29 @@ import { getWebUIURL } from '~/common/webui';
 
 const isMac = process.platform === 'darwin';
 
+const openDevToolsWithPosition = (webContents: Electron.WebContents) => {
+  const { devToolsPosition } = Application.instance.settings.object;
+  
+  if (webContents.isDevToolsOpened()) {
+    webContents.closeDevTools();
+  } else {
+    webContents.openDevTools({ mode: devToolsPosition });
+  }
+};
+
+const changeDevToolsPosition = (newPosition: string) => {
+  Application.instance.settings.updateSettings({ devToolsPosition: newPosition as any });
+  
+  // If dev tools are currently open, reopen them in the new position
+  const currentWebContents = Application.instance.windows.current?.viewManager?.selected?.webContents;
+  if (currentWebContents && currentWebContents.isDevToolsOpened()) {
+    currentWebContents.closeDevTools();
+    setTimeout(() => {
+      currentWebContents.openDevTools({ mode: newPosition as any });
+    }, 100);
+  }
+};
+
 const createMenuItem = (
   shortcuts: string[],
   action: (
@@ -287,11 +310,50 @@ export const getMainMenu = () => {
               ['CmdOrCtrl+Shift+I', 'CmdOrCtrl+Shift+J', 'F12'],
               () => {
                 setTimeout(() => {
-                  Application.instance.windows.current.viewManager.selected.webContents.toggleDevTools();
+                  openDevToolsWithPosition(Application.instance.windows.current.viewManager.selected.webContents);
                 });
               },
               'Developer tools...',
             ),
+
+            // Developer tools position submenu
+            {
+              label: 'Developer Tools Position',
+              submenu: [
+                {
+                  label: 'Dock to Bottom',
+                  type: 'radio',
+                  checked: Application.instance.settings.object.devToolsPosition === 'bottom',
+                  click: () => {
+                    changeDevToolsPosition('bottom');
+                  },
+                },
+                {
+                  label: 'Dock to Right',
+                  type: 'radio',
+                  checked: Application.instance.settings.object.devToolsPosition === 'right',
+                  click: () => {
+                    changeDevToolsPosition('right');
+                  },
+                },
+                {
+                  label: 'Dock to Left',
+                  type: 'radio',
+                  checked: Application.instance.settings.object.devToolsPosition === 'left',
+                  click: () => {
+                    changeDevToolsPosition('left');
+                  },
+                },
+                {
+                  label: 'Detach',
+                  type: 'radio',
+                  checked: Application.instance.settings.object.devToolsPosition === 'detach',
+                  click: () => {
+                    changeDevToolsPosition('detach');
+                  },
+                },
+              ],
+            },
 
             // Developer tools (current webContents) (dev)
             ...createMenuItem(['CmdOrCtrl+Shift+F12'], () => {
