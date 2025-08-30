@@ -6,7 +6,7 @@ import { Title, Row, Control, Header } from '../App/style';
 import store from '../../store';
 import { onSwitchChange } from '../../utils';
 import { observer } from 'mobx-react-lite';
-import { TopBarVariant } from '~/interfaces';
+import { TopBarVariant, DevToolsMode } from '~/interfaces';
 
 const onThemeChange = (value: string) => {
   if (value === 'auto') {
@@ -44,6 +44,11 @@ const onTopBarChange = (value: TopBarVariant) => {
   store.save();
 };
 
+const onDevToolsModeChange = (value: DevToolsMode) => {
+  store.settings.devToolsMode = value;
+  store.save();
+};
+
 const TopBarVariant = observer(() => {
   return (
     <Row>
@@ -55,6 +60,25 @@ const TopBarVariant = observer(() => {
         >
           <Dropdown.Item value="default">Full</Dropdown.Item>
           <Dropdown.Item value="compact">Compact</Dropdown.Item>
+        </Dropdown>
+      </Control>
+    </Row>
+  );
+});
+
+const DevToolsMode = observer(() => {
+  return (
+    <Row>
+      <Title>Developer tools dock position</Title>
+      <Control>
+        <Dropdown
+          defaultValue={store.settings.devToolsMode || 'bottom'}
+          onChange={onDevToolsModeChange}
+        >
+          <Dropdown.Item value="bottom">Bottom</Dropdown.Item>
+          <Dropdown.Item value="right">Right</Dropdown.Item>
+          <Dropdown.Item value="undocked">Undocked</Dropdown.Item>
+          <Dropdown.Item value="detach">Detached</Dropdown.Item>
         </Dropdown>
       </Control>
     </Row>
@@ -109,6 +133,7 @@ export const Appearance = observer(() => {
       <WarnQuit />
       <ThemeVariant />
       <TopBarVariant />
+      <DevToolsMode />
     </>
   );
 });
